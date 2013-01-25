@@ -1,0 +1,290 @@
+#!/bin/bash
+
+#
+#   Resource Agent for managing foobar resources.
+#
+#   License:      PostgreSQL License (BSD Like)
+#   (c) 2012-2013 Jehan-Guillaume de Rorthais, Nicolas Thauvin
+#
+
+# Initialization
+: ${OCF_FUNCTIONS_DIR=${OCF_ROOT}/lib/heartbeat}
+. ${OCF_FUNCTIONS_DIR}/ocf-shellfuncs
+
+# Default parameters
+OCF_RESKEY_system_user_default=postgres
+OCF_RESKEY_bindir_default=/usr/bin
+OCF_RESKEY_pgdata_default=/var/lib/pgsql/data
+
+: ${OCF_RESKEY_system_user=${OCF_RESKEY_system_user_default}}
+: ${OCF_RESKEY_bindir=${OCF_RESKEY_bindir_default}}
+: ${OCF_RESKEY_pgdata=${OCF_RESKEY_pgdata_default}}
+
+
+ocf_meta_data() {
+    cat <<EOF
+<?xml version="1.0"?>
+<!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
+<resource-agent name="pgsqlsr">
+  <version>1.0</version>
+
+  <longdesc lang="en">
+    Resource script for PostgreSQL in replication. It manages PostgreSQL servers using streaming replication as an HA resource.
+  </longdesc>
+  <shortdesc lang="en">Manages PostgreSQL servers in replication</shortdesc>
+  <parameters>
+    <parameter name="startable" unique="0" required="0">
+      <longdesc lang="en">
+        Is the resource startable ?
+      </longdesc>
+      <shortdesc lang="en">Is the resource startable ?</shortdesc>
+      <content type="string" default="" />
+    </parameter>
+
+    <parameter name="system_user" unique="0" required="0">
+      <longdesc lang="en">
+        System user account used to run the PostgreSQL server
+      </longdesc>
+      <shortdesc lang="en">PostgreSQL system User</shortdesc>
+      <content type="string" default="${OCF_RESKEY_system_user_default}" />
+    </parameter>
+
+    <parameter name="bindir" unique="0" required="0">
+      <longdesc lang="en">
+        Path to the directory storing the PostgreSQL binaries. The agent uses pg_controldata and pg_ctl.
+      </longdesc>
+      <shortdesc lang="en">Path to the PostgreSQL binaries</shortdesc>
+      <content type="string" default="${OCF_RESKEY_bindir_default}" />
+    </parameter>
+
+    <parameter name="pgdata" unique="0" required="0">
+      <longdesc lang="en">
+        Path to the data directory, e.g. PGDATA
+      </longdesc>
+      <shortdesc lang="en">Path to the data directory</shortdesc>
+      <content type="string" default="${OCF_RESKEY_pgdata_default}" />
+    </parameter>
+
+  </parameters>
+  <actions>
+    <action name="start" timeout="120" />
+    <action name="stop" timeout="120" />
+    <action name="status" timeout="60" />
+    <action name="monitor" depth="0" timeout="30" interval="30"/>
+    <action name="meta-data" timeout="5" />
+    <action name="validate-all" timeout="5" />
+    <action name="methods" timeout="5" />
+  </actions>
+</resource-agent>
+EOF
+}
+
+ocf_methods() {
+  cat <<EOF
+        start
+        stop
+        status
+        monitor
+        methods
+        meta-data
+        validate-all
+EOF
+}
+
+# Check if the PostgreSQL server is master in the replication. We
+# check the pg_control instead of connecting to the serveur, this way
+# the agent do not require to setup a batch connection with a .pgpass
+# file.
+#
+# returns 1 when master, 0 when slave
+#
+pg_is_master() {
+    su -l -c "${OCF_RESKEY_bindir}/pg_controldata ${OCF_RESKEY_pgdata} | grep -Eq '^Database cluster state: +in archive recovery'" ${OCF_RESKEY_system_user}
+    return $?
+}
+
+# Find if a server is running. We use pg_ctl to test is the
+# postmaster.pid is correct.
+#
+# returns $OCF_NOT_RUNNING when stopped, $OCF_SUCCESS when started
+pg_status() {
+    local rc
+    local is_master
+
+    su -l -c "${OCF_RESKEY_bindir}/pg_ctl -D ${OCF_RESKEY_pgdata} status 2>/dev/null|grep -q 'server is running'" ${OCF_RESKEY_system_user}
+    rc=$?
+
+    # le noeud n'est pas démarré
+    if [ $rc -eq 0 ]; then
+        return $OCF_SUCCESS
+    elif [ $rc -eq 1 ]; then
+	return $OCF_NOT_RUNNING
+    fi
+
+    # sinon erreur
+    return $OCF_ERR_GENERIC
+}
+
+# Start the PostgreSQL server
+pg_start() {
+    local rc
+    su -l -c "${OCF_RESKEY_bindir}/pg_ctl -D ${OCF_RESKEY_pgdata} -w start" ${OCF_RESKEY_system_user}
+    rc=$?
+
+    if test $rc -eq 0; then
+	return $OCF_SUCCESS
+    fi
+
+    return $OCF_ERR_GENERIC
+}
+
+# Promote a slave server to master (from the PostgreSQL point of
+# view). We also modify the startable resource parameter to block
+# another failover until a DBA has taken proper action to reinitiate
+# the replication. In short, we do not want the cluster to failover
+# the resource on another node while a base backup is running, and
+# mess with the data.
+failover() {
+    local rc
+
+    # Change the startable parameter to the name of the promoted slave
+    crm_resource --resource $OCF_RESOURCE_INSTANCE --set-parameter startable --parameter-value $(uname -n)
+    
+    su -l -c "${OCF_RESKEY_bindir}/pg_ctl -D ${OCF_RESKEY_pgdata} promote" ${OCF_RESKEY_system_user}
+    rc=$?
+
+    if test $rc -eq 0; then
+	return $OCF_SUCCESS
+    fi
+
+    return $OCF_ERR_GENERIC
+}
+
+
+# Actions
+#start	 Start the resource	 Return 0 on success and an appropriate error code otherwise. Must not report success until the resource is fully active.
+#stop	 Stop the resource	 Return 0 on success and an appropriate error code otherwise. Must not report success until the resource is fully stopped.
+#monitor	 Check the resource's state	 Exit 0 if the resource is running, 7 if it is stopped and anything else if it is failed.
+#NOTE: The monitor script should test the state of the resource on the local machine only.
+#meta-data	 Describe the resource	 Provide information about this resource as an XML snippet. Exit with 0.
+#NOTE: This is not performed as root.
+#validate-all	 Verify the supplied parameters are correct	 Exit with 0 if parameters are valid, 2 if not valid, 6 if resource is not configured.
+
+case $1 in
+    start)
+	startable="$(crm_resource --resource $OCF_RESOURCE_INSTANCE --get-parameter startable)"
+	if [ "$startable" != "" ] && [ "$(uname -n)" != "$startable" ]; then
+	    # Avoid any further failover until a human being unblocks the resource
+	    ocf_log err "Resource is blocked. A failover has occured on '${startable}'."
+	    exit $OCF_ERR_GENERIC
+	fi
+
+	pg_is_master
+	rc=$?
+	if test $rc -eq 1; then
+	    # Master
+	    pg_status
+	    rc=$?
+
+	    case $rc in
+	    $OCF_SUCCESS)
+		ocf_log info "Primary server already started"
+		exit $OCF_SUCCESS
+		;;
+	    $OCF_NOT_RUNNING)
+		ocf_log info "Starting Primary server"
+		pg_start
+		exit $?
+		;;
+            $OCF_ERR_GENERIC)
+		ocf_log error "Undefined status on the Primary server"
+		exit $OCF_ERR_GENERIC
+		;;
+	    esac
+	else
+	    # cas de l'esclave
+	    pg_status
+	    rc=$?
+
+	    case $rc in
+	    $OCF_NOT_RUNNING)
+	        ocf_log info "Starting Standby server"
+		pg_start
+		exit $?
+		;;
+	    $OCF_SUCCESS)
+	        ocf_log info "Promoting Standby server to Master"
+		failover
+		exit $?
+		;;
+	    $OCF_ERR_GENERIC)
+	        ocf_log error "Undefined status on the Standby server"
+		exit $OCF_ERR_GENERIC
+		;;
+	    esac
+	fi
+	;;
+    stop)
+	# Going back from master to slave automaticaly is dangerous
+	ocf_log info "Going back from Primary to Standby forbidden. Rebuild the standby server"
+	exit $OCF_SUCCESS
+	;;
+    monitor)
+	# donne l'etat de la resource
+	# si maitre -> demarre, rc=$OCF_SUCCESS
+	# si esclave -> eteint, rc=$OCF_NOT_RUNNING
+	pg_is_master
+	rc=$?
+	if test $rc -eq 1; then
+	    # cas du maitre
+
+	    pg_status
+	    rc=$?
+
+	    case $rc in
+	    $OCF_SUCCESS)
+	        ocf_log debug "Monitor succesful on Primary"
+		exit $OCF_SUCCESS
+		;;
+	    *)
+		ocf_log err "Undefined state"
+		exit $OCF_ERR_GENERIC
+		;;
+	    esac
+	else
+	    # cas de l'esclave
+	    pg_status
+	    rc=$?
+
+	    case $rc in
+	    $OCF_NOT_RUNNING)
+	        ocf_log info "Starting the Standby"
+		pg_start
+		exit $?
+		;;
+	    $OCF_SUCCESS)
+	        ocf_log debug "Monitor successful on Standby"
+		exit $OCF_NOT_RUNNING
+		;;
+	    $OCF_ERR_GENERIC)
+	        ocf_log err "Undefined state"
+		exit $OCF_ERR_GENERIC
+		;;
+	    esac
+	fi
+	;;
+    meta-data)
+	ocf_meta_data
+	exit 0
+	;;
+    methods)
+	ocf_methods
+	exit 0
+	;;
+    validate-all)
+	exit 0
+	;;
+    *)
+	exit $OCF_ERR_UNIMPLEMENTED
+	;;
+esac
