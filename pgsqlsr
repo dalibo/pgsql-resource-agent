@@ -150,7 +150,7 @@ pg_status() {
     if [ $rc -eq 0 ]; then
         return $OCF_SUCCESS
     elif [ $rc -eq 1 ]; then
-	return $OCF_NOT_RUNNING
+        return $OCF_NOT_RUNNING
     fi
 
     # sinon erreur
@@ -165,7 +165,7 @@ pg_start() {
     rc=$?
 
     if test $rc -eq 0; then
-	return $OCF_SUCCESS
+        return $OCF_SUCCESS
     fi
 
     return $OCF_ERR_GENERIC
@@ -200,138 +200,138 @@ failover() {
 
 
 # Actions
-#start	 Start the resource	 Return 0 on success and an appropriate error code otherwise. Must not report success until the resource is fully active.
-#stop	 Stop the resource	 Return 0 on success and an appropriate error code otherwise. Must not report success until the resource is fully stopped.
-#monitor	 Check the resource's state	 Exit 0 if the resource is running, 7 if it is stopped and anything else if it is failed.
+#start   Start the resource      Return 0 on success and an appropriate error code otherwise. Must not report success until the resource is fully active.
+#stop    Stop the resource       Return 0 on success and an appropriate error code otherwise. Must not report success until the resource is fully stopped.
+#monitor         Check the resource's state      Exit 0 if the resource is running, 7 if it is stopped and anything else if it is failed.
 #NOTE: The monitor script should test the state of the resource on the local machine only.
-#meta-data	 Describe the resource	 Provide information about this resource as an XML snippet. Exit with 0.
+#meta-data       Describe the resource   Provide information about this resource as an XML snippet. Exit with 0.
 #NOTE: This is not performed as root.
-#validate-all	 Verify the supplied parameters are correct	 Exit with 0 if parameters are valid, 2 if not valid, 6 if resource is not configured.
+#validate-all    Verify the supplied parameters are correct      Exit with 0 if parameters are valid, 2 if not valid, 6 if resource is not configured.
 
 case $1 in
     start)
-	pgsql_validate_all || exit $?
+        pgsql_validate_all || exit $?
 
-	# on a master, just start pgsql.
-	# start is a promotion on a slave
-	startable="$(crm_resource --resource $OCF_RESOURCE_INSTANCE --get-parameter startable)"
-	if [ "$startable" != "" ] && [ "$(uname -n)" != "$startable" ]; then
-	    # Avoid any further failover until a human being unblocks the resource
-	    ocf_log err "Resource is blocked. A failover has occured on '${startable}'."
-	    exit $OCF_ERR_GENERIC
-	fi
+        # on a master, just start pgsql.
+        # start is a promotion on a slave
+        startable="$(crm_resource --resource $OCF_RESOURCE_INSTANCE --get-parameter startable)"
+        if [ "$startable" != "" ] && [ "$(uname -n)" != "$startable" ]; then
+            # Avoid any further failover until a human being unblocks the resource
+            ocf_log err "Resource is blocked. A failover has occured on '${startable}'."
+            exit $OCF_ERR_GENERIC
+        fi
 
-	pg_is_master
-	rc=$?
-	if test $rc; then
-	    # Master
-	    pg_status
-	    rc=$?
+        pg_is_master
+        rc=$?
+        if test $rc; then
+            # Master
+            pg_status
+            rc=$?
 
-	    case $rc in
-	    $OCF_SUCCESS)
-		ocf_log info "Primary server already started"
-		exit $OCF_SUCCESS
-		;;
-	    $OCF_NOT_RUNNING)
-		ocf_log info "Starting Primary server"
-		pg_start
-		exit $?
-		;;
+            case $rc in
+            $OCF_SUCCESS)
+                ocf_log info "Primary server already started"
+                exit $OCF_SUCCESS
+                ;;
+            $OCF_NOT_RUNNING)
+                ocf_log info "Starting Primary server"
+                pg_start
+                exit $?
+                ;;
             $OCF_ERR_GENERIC)
-		ocf_log error "Undefined status on the Primary server"
-		exit $OCF_ERR_GENERIC
-		;;
-	    esac
-	else
-	    # cas de l'esclave
-	    pg_status
-	    rc=$?
+                ocf_log error "Undefined status on the Primary server"
+                exit $OCF_ERR_GENERIC
+                ;;
+            esac
+        else
+            # cas de l'esclave
+            pg_status
+            rc=$?
 
-	    case $rc in
-	    # if not running, we try to start the slave, then promote it.
-	    $OCF_NOT_RUNNING)
-	        ocf_log info "Starting Standby server"
-		pg_start
-		;&
-	    $OCF_SUCCESS)
-	        ocf_log info "Promoting Standby server to Master"
-		failover
-		exit $?
-		;;
-	    $OCF_ERR_GENERIC)
-	        ocf_log error "Undefined status on the Standby server"
-		exit $OCF_ERR_GENERIC
-		;;
-	    esac
-	fi
-	;;
+            case $rc in
+            # if not running, we try to start the slave, then promote it.
+            $OCF_NOT_RUNNING)
+                ocf_log info "Starting Standby server"
+                pg_start
+                ;&
+            $OCF_SUCCESS)
+                ocf_log info "Promoting Standby server to Master"
+                failover
+                exit $?
+                ;;
+            $OCF_ERR_GENERIC)
+                ocf_log error "Undefined status on the Standby server"
+                exit $OCF_ERR_GENERIC
+                ;;
+            esac
+        fi
+        ;;
     stop)
-	pgsql_validate_all || exit $?
+        pgsql_validate_all || exit $?
 
-	# Going back from master to slave automaticaly is dangerous
-	ocf_log info "Going back from Primary to Standby forbidden. Rebuild the standby server"
-	exit $OCF_SUCCESS
-	;;
+        # Going back from master to slave automaticaly is dangerous
+        ocf_log info "Going back from Primary to Standby forbidden. Rebuild the standby server"
+        exit $OCF_SUCCESS
+        ;;
     monitor)
-	pgsql_validate_all || exit $?
+        pgsql_validate_all || exit $?
 
-	# return the status of each node
-	# As we are in a standalone service from the CRM point of view
-	# master should return it is started (rc=$OCF_SUCCESS) and slave
-	# it is stopped (rc=$OCF_NOT_RUNNING)
-	pg_is_master
-	rc=$?
-	if test $rc; then
-	    # cas du maitre
+        # return the status of each node
+        # As we are in a standalone service from the CRM point of view
+        # master should return it is started (rc=$OCF_SUCCESS) and slave
+        # it is stopped (rc=$OCF_NOT_RUNNING)
+        pg_is_master
+        rc=$?
+        if test $rc; then
+            # cas du maitre
 
-	    pg_status
-	    rc=$?
+            pg_status
+            rc=$?
 
-	    case $rc in
-	    $OCF_SUCCESS)
-	        ocf_log debug "Monitor succesful on Primary"
-		exit $OCF_SUCCESS
-		;;
-	    *)
-		ocf_log err "Undefined state"
-		exit $OCF_ERR_GENERIC
-		;;
-	    esac
-	else
-	    # cas de l'esclave
-	    pg_status
-	    rc=$?
+            case $rc in
+            $OCF_SUCCESS)
+                ocf_log debug "Monitor succesful on Primary"
+                exit $OCF_SUCCESS
+                ;;
+            *)
+                ocf_log err "Undefined state"
+                exit $OCF_ERR_GENERIC
+                ;;
+            esac
+        else
+            # cas de l'esclave
+            pg_status
+            rc=$?
 
-	    case $rc in
-	    $OCF_NOT_RUNNING)
-	        ocf_log info "Starting the Standby"
-		pg_start
-		;&
-	    $OCF_SUCCESS)
-	        ocf_log debug "Monitor successful on Standby"
-		exit $OCF_NOT_RUNNING
-		;;
-	    $OCF_ERR_GENERIC)
-	        ocf_log err "Undefined state"
-		exit $OCF_ERR_GENERIC
-		;;
-	    esac
-	fi
-	;;
+            case $rc in
+            $OCF_NOT_RUNNING)
+                ocf_log info "Starting the Standby"
+                pg_start
+                ;&
+            $OCF_SUCCESS)
+                ocf_log debug "Monitor successful on Standby"
+                exit $OCF_NOT_RUNNING
+                ;;
+            $OCF_ERR_GENERIC)
+                ocf_log err "Undefined state"
+                exit $OCF_ERR_GENERIC
+                ;;
+            esac
+        fi
+        ;;
     meta-data)
-	ocf_meta_data
-	exit 0
-	;;
+        ocf_meta_data
+        exit 0
+        ;;
     methods)
-	ocf_methods
-	exit 0
-	;;
+        ocf_methods
+        exit 0
+        ;;
     validate-all)
-	pgsql_validate_all
-	exit $?
-	;;
+        pgsql_validate_all
+        exit $?
+        ;;
     *)
-	exit $OCF_ERR_UNIMPLEMENTED
-	;;
+        exit $OCF_ERR_UNIMPLEMENTED
+        ;;
 esac
