@@ -21,6 +21,40 @@ OCF_RESKEY_pgdata_default=/var/lib/pgsql/data
 : ${OCF_RESKEY_pgdata=${OCF_RESKEY_pgdata_default}}
 
 
+function pgsql_validate_all() {
+    local rc
+
+    # FIXME
+    # http://www.linux-ha.org/doc/dev-guides/_testing_for_binaries_literal_have_binary_literal_and_literal_check_binary_literal.html
+
+    # check binaries
+    check_binary "${OCF_RESKEY_bindir}/postmaster"
+    check_binary "${OCF_RESKEY_bindir}/pg_ctl"
+    check_binary "${OCF_RESKEY_bindir}/psql"
+    check_binary "${OCF_RESKEY_bindir}/pg_controldata"
+    check_binary "${HA_SBIN_DIR}/crm_master"
+
+    # check pgdata
+    if [ ! -d "${OCF_RESKEY_pgdata}" ] ; then
+        ocf_log err "PGDATA \"${OCF_RESKEY_pgdata}\" doesn't exist";
+        return $OCF_ERR_CONFIGURED
+    fi
+
+    # check pgdata
+    if [ ! -s "${OCF_RESKEY_pgdata}/PG_VERSION" ] ; then
+        ocf_log err "PG_VERSION does not exists in \"${OCF_RESKEY_pgdata}\"";
+        return $OCF_ERR_CONFIGURED
+    fi
+
+    # check system user
+    id -nu "${OCF_RESKEY_system_user}" > /dev/null 2>&1
+    rc=$?
+    if [ ! $rc ] ; then
+        ocf_log err "System user \"${OCF_RESKEY_system_user}\" doesn't exist";
+        return $OCF_ERR_CONFIGURED
+    fi
+}
+
 ocf_meta_data() {
     cat <<EOF
 <?xml version="1.0"?>
@@ -126,6 +160,7 @@ pg_status() {
 # Start the PostgreSQL server
 pg_start() {
     local rc
+
     su -l -c "${OCF_RESKEY_bindir}/pg_ctl -D ${OCF_RESKEY_pgdata} -w start" ${OCF_RESKEY_system_user}
     rc=$?
 
@@ -175,6 +210,8 @@ failover() {
 
 case $1 in
     start)
+	pgsql_validate_all || exit $?
+
 	# on a master, just start pgsql.
 	# start is a promotion on a slave
 	startable="$(crm_resource --resource $OCF_RESOURCE_INSTANCE --get-parameter startable)"
@@ -230,11 +267,15 @@ case $1 in
 	fi
 	;;
     stop)
+	pgsql_validate_all || exit $?
+
 	# Going back from master to slave automaticaly is dangerous
 	ocf_log info "Going back from Primary to Standby forbidden. Rebuild the standby server"
 	exit $OCF_SUCCESS
 	;;
     monitor)
+	pgsql_validate_all || exit $?
+
 	# return the status of each node
 	# As we are in a standalone service from the CRM point of view
 	# master should return it is started (rc=$OCF_SUCCESS) and slave
@@ -287,7 +328,8 @@ case $1 in
 	exit 0
 	;;
     validate-all)
-	exit 0
+	pgsql_validate_all
+	exit $?
 	;;
     *)
 	exit $OCF_ERR_UNIMPLEMENTED
