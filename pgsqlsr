@@ -221,9 +221,7 @@ case $1 in
             exit $OCF_ERR_GENERIC
         fi
 
-        pg_is_master
-        rc=$?
-        if test $rc; then
+        if pg_is_master ; then
             # Master
             pg_status
             rc=$?
@@ -280,9 +278,7 @@ case $1 in
         # As we are in a standalone service from the CRM point of view
         # master should return it is started (rc=$OCF_SUCCESS) and slave
         # it is stopped (rc=$OCF_NOT_RUNNING)
-        pg_is_master
-        rc=$?
-        if test $rc; then
+        if pg_is_master; then
             # cas du maitre
 
             pg_status
