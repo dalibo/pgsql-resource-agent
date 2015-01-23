@@ -15,10 +15,12 @@
 OCF_RESKEY_system_user_default=postgres
 OCF_RESKEY_bindir_default=/usr/bin
 OCF_RESKEY_pgdata_default=/var/lib/pgsql/data
+OCF_RESKEY_startable_default=all
 
 : ${OCF_RESKEY_system_user=${OCF_RESKEY_system_user_default}}
 : ${OCF_RESKEY_bindir=${OCF_RESKEY_bindir_default}}
 : ${OCF_RESKEY_pgdata=${OCF_RESKEY_pgdata_default}}
+: ${OCF_RESKEY_startable=${OCF_RESKEY_startable_default}}
 
 
 function pgsql_validate_all() {
@@ -67,11 +69,14 @@ ocf_meta_data() {
   </longdesc>
   <shortdesc lang="en">Manages PostgreSQL servers in replication</shortdesc>
   <parameters>
-    <parameter name="startable" unique="0" required="0">
+    <parameter name="startable" unique="0" required="1">
       <longdesc lang="en">
-        Is the resource startable ?
+        On which nodes is the resource startable ?
+        Possible values:
+          "all" for all nodes ;
+          "hostname" for only one node (used in case of failover, to avoid failback).
       </longdesc>
-      <shortdesc lang="en">Is the resource startable ?</shortdesc>
+      <shortdesc lang="en">Nodes allowed to start the resource</shortdesc>
       <content type="string" default="" />
     </parameter>
 
@@ -91,7 +96,7 @@ ocf_meta_data() {
       <content type="string" default="${OCF_RESKEY_bindir_default}" />
     </parameter>
 
-    <parameter name="pgdata" unique="0" required="0">
+    <parameter name="pgdata" unique="1" required="0">
       <longdesc lang="en">
         Path to the data directory, e.g. PGDATA
       </longdesc>
@@ -104,6 +109,7 @@ ocf_meta_data() {
     <action name="start" timeout="120" />
     <action name="stop" timeout="120" />
     <action name="status" timeout="60" />
+    <action name="reload" timeout="120" />
     <action name="monitor" depth="0" timeout="30" interval="30"/>
     <action name="meta-data" timeout="5" />
     <action name="validate-all" timeout="5" />
@@ -118,6 +124,7 @@ ocf_methods() {
         start
         stop
         status
+        reload
         monitor
         methods
         meta-data
@@ -135,7 +142,7 @@ pg_is_master() {
     return $?
 }
 
-# Find if a server is running. We use pg_ctl to test is the
+# Find if a server is running. We use pg_ctl to test if the
 # postmaster.pid is correct.
 #
 # returns $OCF_NOT_RUNNING when stopped, $OCF_SUCCESS when started
@@ -146,14 +153,14 @@ pg_status() {
     su -l -c "${OCF_RESKEY_bindir}/pg_ctl -D ${OCF_RESKEY_pgdata} status 2>/dev/null|grep -q 'server is running'" ${OCF_RESKEY_system_user}
     rc=$?
 
-    # le noeud n'est pas démarré
+    # check whether PostgreSQL is running or not
     if [ $rc -eq 0 ]; then
         return $OCF_SUCCESS
     elif [ $rc -eq 1 ]; then
         return $OCF_NOT_RUNNING
     fi
 
-    # sinon erreur
+    # PostgreSQL state is unknown
     return $OCF_ERR_GENERIC
 }
 
@@ -169,6 +176,11 @@ pg_start() {
     fi
 
     return $OCF_ERR_GENERIC
+}
+
+pg_reload() {
+    ocf_log info "startable attribute changed to: $OCF_RESKEY_startable"
+    return $OCF_SUCCESS
 }
 
 # Promote a slave server to master (from the PostgreSQL point of
@@ -214,10 +226,9 @@ case $1 in
 
         # on a master, just start pgsql.
         # start is a promotion on a slave
-        startable="$(crm_resource --resource $OCF_RESOURCE_INSTANCE --get-parameter startable)"
-        if [ "$startable" != "" ] && [ "$(uname -n)" != "$startable" ]; then
+        if [ "$OCF_RESKEY_startable" != "all" ] && [ "$(uname -n)" != "$OCF_RESKEY_startable" ]; then
             # Avoid any further failover until a human being unblocks the resource
-            ocf_log err "Resource is blocked. A failover has occured on '${startable}'."
+            ocf_log err "Resource is blocked. A failover has occured on '${OCF_RESKEY_startable}'."
             exit $OCF_ERR_GENERIC
         fi
 
@@ -242,7 +253,7 @@ case $1 in
                 ;;
             esac
         else
-            # cas de l'esclave
+            # Slave
             pg_status
             rc=$?
 
@@ -271,6 +282,10 @@ case $1 in
         ocf_log info "Going back from Primary to Standby forbidden. Rebuild the standby server"
         exit $OCF_SUCCESS
         ;;
+    reload)
+        pg_reload
+        exit $?
+        ;;
     monitor)
         pgsql_validate_all || exit $?
 
@@ -279,14 +294,14 @@ case $1 in
         # master should return it is started (rc=$OCF_SUCCESS) and slave
         # it is stopped (rc=$OCF_NOT_RUNNING)
         if pg_is_master; then
-            # cas du maitre
+            # Master
 
             pg_status
             rc=$?
 
             case $rc in
             $OCF_SUCCESS)
-                ocf_log debug "Monitor succesful on Primary"
+                ocf_log debug "Monitor successful on Primary"
                 exit $OCF_SUCCESS
                 ;;
             *)
@@ -295,7 +310,7 @@ case $1 in
                 ;;
             esac
         else
-            # cas de l'esclave
+            # Slave
             pg_status
             rc=$?
 
