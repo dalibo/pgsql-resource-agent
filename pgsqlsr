@@ -15,12 +15,10 @@
 OCF_RESKEY_system_user_default=postgres
 OCF_RESKEY_bindir_default=/usr/bin
 OCF_RESKEY_pgdata_default=/var/lib/pgsql/data
-OCF_RESKEY_startable_default=all
 
 : ${OCF_RESKEY_system_user=${OCF_RESKEY_system_user_default}}
 : ${OCF_RESKEY_bindir=${OCF_RESKEY_bindir_default}}
 : ${OCF_RESKEY_pgdata=${OCF_RESKEY_pgdata_default}}
-: ${OCF_RESKEY_startable=${OCF_RESKEY_startable_default}}
 
 
 function pgsql_validate_all() {
@@ -69,12 +67,12 @@ ocf_meta_data() {
   </longdesc>
   <shortdesc lang="en">Manages PostgreSQL servers in replication</shortdesc>
   <parameters>
-    <parameter name="startable" unique="0" required="1">
+    <parameter name="startable" unique="0" required="0">
       <longdesc lang="en">
-        On which nodes is the resource startable ?
-        Possible values:
-          "all" for all nodes ;
-          "hostname" for only one node (used in case of failover, to avoid failback).
+        Values for this parameter show which nodes the resource is startable on.
+        If not set, all nodes are allowed to run the resource.
+        When set to an hostname, it only allows this one node.
+        This is automatically done in case of failover, to avoid failback.
       </longdesc>
       <shortdesc lang="en">Nodes allowed to start the resource</shortdesc>
       <content type="string" default="" />
@@ -179,6 +177,9 @@ pg_start() {
 }
 
 pg_reload() {
+    # no action necessary, this action is just to inform pacemaker that
+    # modification of non-unique parameters can be applied without 
+    # restarting the resource
     ocf_log info "startable attribute changed to: $OCF_RESKEY_startable"
     return $OCF_SUCCESS
 }
@@ -226,7 +227,7 @@ case $1 in
 
         # on a master, just start pgsql.
         # start is a promotion on a slave
-        if [ "$OCF_RESKEY_startable" != "all" ] && [ "$(uname -n)" != "$OCF_RESKEY_startable" ]; then
+        if [ "$OCF_RESKEY_startable" != "" ] && [ "$(uname -n)" != "$OCF_RESKEY_startable" ]; then
             # Avoid any further failover until a human being unblocks the resource
             ocf_log err "Resource is blocked. A failover has occured on '${OCF_RESKEY_startable}'."
             exit $OCF_ERR_GENERIC
