@@ -140,8 +140,7 @@ pg_is_master() {
     local rc
 
     instance_state=$(su -l -c "${OCF_RESKEY_bindir}/pg_controldata ${OCF_RESKEY_pgdata} | \
-        grep -E '^Database cluster state: +' | \
-        sed 's/^Database cluster state: \+//'" \
+        sed -rn 's/^Database cluster state:\s+(.*)/\1/p'" \
         ${OCF_RESKEY_system_user})
 
     case $instance_state in
@@ -236,10 +235,7 @@ is_startable() {
     # Going back from master to slave automaticaly is dangerous.
     # Avoid any further failover until a human being unblocks the resource.
     # Also, the old master should not be started again.
-    if [ "$OCF_RESKEY_startable" != "" ] && [ "$(uname -n)" != "$OCF_RESKEY_startable" ]; then
-        return $OCF_ERR_GENERIC
-    fi
-    return $OCF_SUCCESS
+    return test -z "$OCF_RESKEY_startable" -o "$OCF_RESKEY_startable" = "$(uname -n)"
 }
 
 # Promote a slave server to master (from the PostgreSQL point of
