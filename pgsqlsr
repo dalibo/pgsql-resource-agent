@@ -235,7 +235,8 @@ is_startable() {
     # Going back from master to slave automaticaly is dangerous.
     # Avoid any further failover until a human being unblocks the resource.
     # Also, the old master should not be started again.
-    return test -z "$OCF_RESKEY_startable" -o "$OCF_RESKEY_startable" = "$(uname -n)"
+    test -z "$OCF_RESKEY_startable" -o "$OCF_RESKEY_startable" = "$(uname -n)"
+    return $?
 }
 
 # Promote a slave server to master (from the PostgreSQL point of
