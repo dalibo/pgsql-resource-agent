@@ -139,7 +139,7 @@ pg_is_master() {
     local instance_state
     local rc
 
-    instance_state=$(su -l -c "${OCF_RESKEY_bindir}/pg_controldata ${OCF_RESKEY_pgdata} | \
+    instance_state=$(su -l -c "LANG=C ${OCF_RESKEY_bindir}/pg_controldata ${OCF_RESKEY_pgdata} | \
         sed -rn 's/^Database cluster state:\s+(.*)/\1/p'" \
         ${OCF_RESKEY_system_user})
 
@@ -174,7 +174,7 @@ pg_is_master() {
 pg_is_running() {
     local rc
 
-    su -l -c "${OCF_RESKEY_bindir}/pg_ctl -D ${OCF_RESKEY_pgdata} status 2>/dev/null|grep -q 'server is running'" ${OCF_RESKEY_system_user}
+    su -l -c "LANG=C ${OCF_RESKEY_bindir}/pg_ctl -D ${OCF_RESKEY_pgdata} status 2>/dev/null|grep -q 'server is running'" ${OCF_RESKEY_system_user}
     rc=$?
 
     # check whether PostgreSQL is running or not
