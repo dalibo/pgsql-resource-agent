@@ -36,13 +36,13 @@ function pgsql_validate_all() {
 
     # check pgdata
     if [ ! -d "${OCF_RESKEY_pgdata}" ] ; then
-        ocf_log err "PGDATA \"${OCF_RESKEY_pgdata}\" doesn't exist";
+        ocf_log error "PGDATA \"${OCF_RESKEY_pgdata}\" doesn't exist";
         return $OCF_ERR_CONFIGURED
     fi
 
     # check pgdata
     if [ ! -s "${OCF_RESKEY_pgdata}/PG_VERSION" ] ; then
-        ocf_log err "PG_VERSION does not exists in \"${OCF_RESKEY_pgdata}\"";
+        ocf_log error "PG_VERSION does not exists in \"${OCF_RESKEY_pgdata}\"";
         return $OCF_ERR_CONFIGURED
     fi
 
@@ -50,7 +50,7 @@ function pgsql_validate_all() {
     id -nu "${OCF_RESKEY_system_user}" > /dev/null 2>&1
     rc=$?
     if [ ! $rc ] ; then
-        ocf_log err "System user \"${OCF_RESKEY_system_user}\" doesn't exist";
+        ocf_log error "System user \"${OCF_RESKEY_system_user}\" doesn't exist";
         return $OCF_ERR_CONFIGURED
     fi
 }
@@ -69,9 +69,12 @@ ocf_meta_data() {
   <parameters>
     <parameter name="startable" unique="0" required="0">
       <longdesc lang="en">
-        Is the resource startable ?
+        Values for this parameter show which nodes the resource is startable on.
+        If not set, all nodes are allowed to run the resource.
+        When set to an hostname, it only allows this one node.
+        This is automatically done in case of failover, to avoid failback.
       </longdesc>
-      <shortdesc lang="en">Is the resource startable ?</shortdesc>
+      <shortdesc lang="en">Nodes allowed to start the resource</shortdesc>
       <content type="string" default="" />
     </parameter>
 
@@ -91,7 +94,7 @@ ocf_meta_data() {
       <content type="string" default="${OCF_RESKEY_bindir_default}" />
     </parameter>
 
-    <parameter name="pgdata" unique="0" required="0">
+    <parameter name="pgdata" unique="1" required="0">
       <longdesc lang="en">
         Path to the data directory, e.g. PGDATA
       </longdesc>
@@ -104,6 +107,7 @@ ocf_meta_data() {
     <action name="start" timeout="120" />
     <action name="stop" timeout="120" />
     <action name="status" timeout="60" />
+    <action name="reload" timeout="120" />
     <action name="monitor" depth="0" timeout="30" interval="30"/>
     <action name="meta-data" timeout="5" />
     <action name="validate-all" timeout="5" />
@@ -118,6 +122,7 @@ ocf_methods() {
         start
         stop
         status
+        reload
         monitor
         methods
         meta-data
@@ -131,29 +136,58 @@ EOF
 # file.
 #
 pg_is_master() {
-    su -l -c "${OCF_RESKEY_bindir}/pg_controldata ${OCF_RESKEY_pgdata} | grep -Eq '^Database cluster state: +in production'" ${OCF_RESKEY_system_user}
-    return $?
+    local instance_state
+    local rc
+
+    instance_state=$(su -l -c "LANG=C ${OCF_RESKEY_bindir}/pg_controldata ${OCF_RESKEY_pgdata} | \
+        sed -rn 's/^Database cluster state:\s+(.*)/\1/p'" \
+        ${OCF_RESKEY_system_user})
+
+    case $instance_state in
+        "in production"|"shut down")
+            # Master state
+            ocf_log debug "$__OCF_ACTION - pg_is_master : instance $OCF_RESOURCE_INSTANCE is Primary."
+            ocf_log debug "$__OCF_ACTION - pg_is_master : instance $OCF_RESOURCE_INSTANCE state is \"$instance_state\"."
+            rc=$OCF_SUCCESS
+            ;;
+        "in archive recovery"|"shut down in recovery")
+            # Slave state
+            ocf_log debug "$__OCF_ACTION - pg_is_master : instance $OCF_RESOURCE_INSTANCE is Standby."
+            ocf_log debug "$__OCF_ACTION - pg_is_master : instance $OCF_RESOURCE_INSTANCE state is \"$instance_state\"."
+            rc=$OCF_ERR_GENERIC
+            ;;
+        *)
+            # crash recovery or shutting down
+            ocf_log error "$__OCF_ACTION - pg_is_master : unable find out if $OCF_RESOURCE_INSTANCE is Primary or Standby."
+            ocf_log debug "$__OCF_ACTION - pg_is_master : instance state is \"$instance_state\"."
+            exit $OCF_ERR_GENERIC
+            ;;
+         esac
+
+    return $rc
 }
 
-# Find if a server is running. We use pg_ctl to test is the
+# Find if a server is running. We use pg_ctl to test if the
 # postmaster.pid is correct.
 #
 # returns $OCF_NOT_RUNNING when stopped, $OCF_SUCCESS when started
-pg_status() {
+pg_is_running() {
     local rc
-    local is_master
 
-    su -l -c "${OCF_RESKEY_bindir}/pg_ctl -D ${OCF_RESKEY_pgdata} status 2>/dev/null|grep -q 'server is running'" ${OCF_RESKEY_system_user}
+    su -l -c "LANG=C ${OCF_RESKEY_bindir}/pg_ctl -D ${OCF_RESKEY_pgdata} status 2>/dev/null|grep -q 'server is running'" ${OCF_RESKEY_system_user}
     rc=$?
 
-    # le noeud n'est pas démarré
+    # check whether PostgreSQL is running or not
     if [ $rc -eq 0 ]; then
+        ocf_log debug "$__OCF_ACTION - pg_is_running : instance $OCF_RESOURCE_INSTANCE is running."
         return $OCF_SUCCESS
     elif [ $rc -eq 1 ]; then
+        ocf_log debug "$__OCF_ACTION - pg_is_running : instance $OCF_RESOURCE_INSTANCE is not running."
         return $OCF_NOT_RUNNING
     fi
 
-    # sinon erreur
+    # PostgreSQL state is unknown
+    ocf_log error "$__OCF_ACTION - pg_is_running : status of instance $OCF_RESOURCE_INSTANCE is unknown."
     return $OCF_ERR_GENERIC
 }
 
@@ -165,10 +199,44 @@ pg_start() {
     rc=$?
 
     if test $rc -eq 0; then
+        ocf_log info "$__OCF_ACTION - pg_start : instance $OCF_RESOURCE_INSTANCE started."
         return $OCF_SUCCESS
     fi
 
+    ocf_log error "$__OCF_ACTION - pg_start : instance $OCF_RESOURCE_INSTANCE failed to start."
     return $OCF_ERR_GENERIC
+}
+
+# Stop the PostgreSQL server
+pg_stop() {
+    local rc
+
+    su -l -c "${OCF_RESKEY_bindir}/pg_ctl -D ${OCF_RESKEY_pgdata} -m fast -w stop" ${OCF_RESKEY_system_user}
+    rc=$?
+
+    if test $rc -eq 0; then
+        ocf_log info "$__OCF_ACTION - pg_stop : instance $OCF_RESOURCE_INSTANCE stopped."
+        return $OCF_SUCCESS
+    fi
+
+    ocf_log error "$__OCF_ACTION - pg_stop : instance $OCF_RESOURCE_INSTANCE failed to stop."
+    return $OCF_ERR_GENERIC
+}
+
+pg_reload() {
+    # no action necessary, this action is just to inform pacemaker that
+    # modification of non-unique parameters can be applied without 
+    # restarting the resource
+    ocf_log info "$__OCF_ACTION - pg_reload : instance $OCF_RESOURCE_INSTANCE \"startable\" attribute changed to: \"$OCF_RESKEY_startable\"."
+    return $OCF_SUCCESS
+}
+
+is_startable() {
+    # Going back from master to slave automaticaly is dangerous.
+    # Avoid any further failover until a human being unblocks the resource.
+    # Also, the old master should not be started again.
+    test -z "$OCF_RESKEY_startable" -o "$OCF_RESKEY_startable" = "$(uname -n)"
+    return $?
 }
 
 # Promote a slave server to master (from the PostgreSQL point of
@@ -192,9 +260,11 @@ failover() {
         do
             sleep 1
         done
+        ocf_log info "$__OCF_ACTION - failover : instance $OCF_RESOURCE_INSTANCE promoted."
         return $OCF_SUCCESS
     fi
 
+    ocf_log error "$__OCF_ACTION - failover : failed to promote instance ${OCF_RESOURCE_INSTANCE}."
     return $OCF_ERR_GENERIC
 }
 
@@ -212,53 +282,55 @@ case $1 in
     start)
         pgsql_validate_all || exit $?
 
-        # on a master, just start pgsql.
-        # start is a promotion on a slave
-        startable="$(crm_resource --resource $OCF_RESOURCE_INSTANCE --get-parameter startable)"
-        if [ "$startable" != "" ] && [ "$(uname -n)" != "$startable" ]; then
+        # do not attempt to start on another node if startable is set
+        if ! is_startable; then
+            # Going back from master to slave automaticaly is dangerous
             # Avoid any further failover until a human being unblocks the resource
-            ocf_log err "Resource is blocked. A failover has occured on '${startable}'."
+            ocf_log error "$__OCF_ACTION - Resource is blocked. A failover has occured on \"${OCF_RESKEY_startable}\"."
+            ocf_log info "Going back from Primary to Standby forbidden. Rebuild the standby server."
             exit $OCF_ERR_GENERIC
         fi
 
+        # on a master, just start pgsql.
+        # start is a promotion on a slave
         if pg_is_master ; then
             # Master
-            pg_status
+            pg_is_running
             rc=$?
 
             case $rc in
             $OCF_SUCCESS)
-                ocf_log info "Primary server already started"
+                ocf_log info "$__OCF_ACTION - Primary $OCF_RESOURCE_INSTANCE already started."
                 exit $OCF_SUCCESS
                 ;;
             $OCF_NOT_RUNNING)
-                ocf_log info "Starting Primary server"
+                ocf_log info "$__OCF_ACTION - Starting Primary ${OCF_RESOURCE_INSTANCE}."
                 pg_start
                 exit $?
                 ;;
             $OCF_ERR_GENERIC)
-                ocf_log error "Undefined status on the Primary server"
+                ocf_log error "$__OCF_ACTION - Undefined status on the Primary ${OCF_RESOURCE_INSTANCE}."
                 exit $OCF_ERR_GENERIC
                 ;;
             esac
         else
-            # cas de l'esclave
-            pg_status
+            # Slave
+            pg_is_running
             rc=$?
 
             case $rc in
             # if not running, we try to start the slave, then promote it.
             $OCF_NOT_RUNNING)
-                ocf_log info "Starting Standby server"
+                ocf_log info "$__OCF_ACTION - Starting Standby ${OCF_RESOURCE_INSTANCE}."
                 pg_start
                 ;&
             $OCF_SUCCESS)
-                ocf_log info "Promoting Standby server to Master"
+                ocf_log info "$__OCF_ACTION - Promoting Standby ${OCF_RESOURCE_INSTANCE} server to Primary."
                 failover
                 exit $?
                 ;;
             $OCF_ERR_GENERIC)
-                ocf_log error "Undefined status on the Standby server"
+                ocf_log error "$__OCF_ACTION - Undefined status on the Standby ${OCF_RESOURCE_INSTANCE}."
                 exit $OCF_ERR_GENERIC
                 ;;
             esac
@@ -267,41 +339,75 @@ case $1 in
     stop)
         pgsql_validate_all || exit $?
 
-        # Going back from master to slave automaticaly is dangerous
-        ocf_log info "Going back from Primary to Standby forbidden. Rebuild the standby server"
-        exit $OCF_SUCCESS
-        ;;
-    monitor)
-        pgsql_validate_all || exit $?
-
-        # return the status of each node
-        # As we are in a standalone service from the CRM point of view
-        # master should return it is started (rc=$OCF_SUCCESS) and slave
-        # it is stopped (rc=$OCF_NOT_RUNNING)
-        if pg_is_master; then
-            # cas du maitre
-
-            pg_status
+        # On a master, just stop the instance.
+        # Stop is ignored on a slave.
+        if pg_is_master ; then
+            # Master
+            pg_is_running
             rc=$?
 
             case $rc in
             $OCF_SUCCESS)
-                ocf_log debug "Monitor succesful on Primary"
+                ocf_log info "$__OCF_ACTION - Stopping Primary ${OCF_RESOURCE_INSTANCE}."
+                pg_stop
+                exit $?
+                ;;
+            $OCF_NOT_RUNNING)
+                ocf_log info "$__OCF_ACTION - Primary ${OCF_RESOURCE_INSTANCE} is not running."
                 exit $OCF_SUCCESS
                 ;;
-            *)
-                ocf_log err "Undefined state"
+            $OCF_ERR_GENERIC)
+                ocf_log error "$__OCF_ACTION - Undefined status on the Primary ${OCF_RESOURCE_INSTANCE}."
                 exit $OCF_ERR_GENERIC
                 ;;
             esac
         else
-            # cas de l'esclave
-            pg_status
+            # Slave
+            ocf_log_info "$__OCF_ACTION - No need to stop a Standby."
+            exit $OCF_SUCCESS
+        fi
+        ;;
+    reload)
+        pg_reload
+        exit $?
+        ;;
+    monitor)
+        pgsql_validate_all || exit $?
+
+        # Return the status of each node.
+        # As we are in a standalone service from the CRM point of view
+        # master should return it is started (rc=$OCF_SUCCESS) and slave
+        # it is stopped (rc=$OCF_NOT_RUNNING)
+        if pg_is_master; then
+            # Master
+
+            pg_is_running
+            rc=$?
+
+            if [ $rc -eq $OCF_SUCCESS ] && is_startable; then
+                # Master is started and allowed to run.
+                ocf_log debug "Monitor successful on Primary"
+                exit $OCF_SUCCESS
+            elif [ $rc -eq $OCF_SUCCESS ] && ! is_startable; then
+                # A Master is started on a not allowed node.
+                # Stop it.
+                ocf_log error "$__OCF_ACTION - Resource is blocked. A failover has occured on \"${OCF_RESKEY_startable}\"."
+                ocf_log info "The instance ${OCF_RESOURCE_INSTANCE} should not run as a Primary on this node."
+                pg_stop
+                exit $OCF_ERR_GENERIC
+            else
+                # The instance is stopped 
+                ocf_log error "$__OCF_ACTION - The instance ${OCF_RESOURCE_INSTANCE} is not running."
+                exit $OCF_NOT_RUNNING
+            fi
+        else
+            # Slave
+            pg_is_running
             rc=$?
 
             case $rc in
             $OCF_NOT_RUNNING)
-                ocf_log info "Starting the Standby"
+                ocf_log info "$__OCF_ACTION - Starting the Standby ${OCF_RESOURCE_INSTANCE}."
                 pg_start
                 ;&
             $OCF_SUCCESS)
@@ -309,7 +415,7 @@ case $1 in
                 exit $OCF_NOT_RUNNING
                 ;;
             $OCF_ERR_GENERIC)
-                ocf_log err "Undefined state"
+                ocf_log error "$__OCF_ACTION - Undefined state for instance ${OCF_RESOURCE_INSTANCE}."
                 exit $OCF_ERR_GENERIC
                 ;;
             esac
