@@ -4,7 +4,7 @@
 #   Resource Agent for managing foobar resources.
 #
 #   License:      PostgreSQL License (BSD Like)
-#   (c) 2012-2013 Jehan-Guillaume de Rorthais, Nicolas Thauvin
+#   (c) 2012-2015 Jehan-Guillaume de Rorthais, Nicolas Thauvin, Maël Rimbault
 #
 
 # Initialization
