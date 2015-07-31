@@ -15,10 +15,12 @@
 OCF_RESKEY_system_user_default=postgres
 OCF_RESKEY_bindir_default=/usr/bin
 OCF_RESKEY_pgdata_default=/var/lib/pgsql/data
+OCF_RESKEY_trigger_file_default=""
 
 : ${OCF_RESKEY_system_user=${OCF_RESKEY_system_user_default}}
 : ${OCF_RESKEY_bindir=${OCF_RESKEY_bindir_default}}
 : ${OCF_RESKEY_pgdata=${OCF_RESKEY_pgdata_default}}
+: ${OCF_RESKEY_trigger_file=${OCF_RESKEY_trigger_file_default}}
 
 
 function pgsql_validate_all() {
@@ -100,6 +102,16 @@ ocf_meta_data() {
       </longdesc>
       <shortdesc lang="en">Path to the data directory</shortdesc>
       <content type="string" default="${OCF_RESKEY_pgdata_default}" />
+    </parameter>
+
+    <parameter name="trigger_file" unique="0" required="0">
+      <longdesc lang="en">
+        The trigger file to create to promote a standby in production with PostgreSQL 9.0.
+        If not set, the promotion uses the "pg_ctl promote" command, incompatible with PostgreSQL
+        9.0.
+      </longdesc>
+      <shortdesc lang="en">Path to the promotion trigger file</shortdesc>
+      <content type="string" default="" />
     </parameter>
 
   </parameters>
@@ -250,9 +262,17 @@ failover() {
 
     # Change the startable parameter to the name of the promoted slave
     crm_resource --resource $OCF_RESOURCE_INSTANCE --set-parameter startable --parameter-value $(uname -n)
-    
-    su -l -c "${OCF_RESKEY_bindir}/pg_ctl -D ${OCF_RESKEY_pgdata} promote" ${OCF_RESKEY_system_user}
-    rc=$?
+
+    if [ "${OCF_RESKEY_trigger_file}" ]; then
+        ocf_log info "$__OCF_ACTION - failover : Promoting using trigger file '${OCF_RESKEY_trigger_file}'."
+        touch "${OCF_RESKEY_trigger_file}"
+        rc=$?
+        chown "${OCF_RESKEY_system_user}" "${OCF_RESKEY_trigger_file}"
+    else
+        ocf_log info "$__OCF_ACTION - failover : Promoting using 'pg_ctl promote'."
+        su -l -c "${OCF_RESKEY_bindir}/pg_ctl -D ${OCF_RESKEY_pgdata} promote" ${OCF_RESKEY_system_user}
+        rc=$?
+    fi
 
     if test $rc -eq 0; then
         # wait for the promote to finish
