@@ -6,6 +6,7 @@
 #   License:      PostgreSQL License (BSD Like)
 #   (c) 2012-2015 Jehan-Guillaume de Rorthais, Nicolas Thauvin, Maël Rimbault
 #
+# Version: v2
 
 # Initialization
 : ${OCF_FUNCTIONS_DIR=${OCF_ROOT}/lib/heartbeat}
