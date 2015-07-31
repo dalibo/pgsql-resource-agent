@@ -338,12 +338,15 @@ case $1 in
             pg_is_running
             rc=$?
 
-            case $rc in
             # if not running, we try to start the slave, then promote it.
-            $OCF_NOT_RUNNING)
+            if [ $rc -eq  $OCF_NOT_RUNNING ]; then
                 ocf_log info "$__OCF_ACTION - Starting Standby ${OCF_RESOURCE_INSTANCE}."
                 pg_start
-                ;&
+                pg_is_running
+                rc=$?
+            fi
+
+            case $rc in
             $OCF_SUCCESS)
                 ocf_log info "$__OCF_ACTION - Promoting Standby ${OCF_RESOURCE_INSTANCE} server to Primary."
                 failover
@@ -425,11 +428,15 @@ case $1 in
             pg_is_running
             rc=$?
 
-            case $rc in
-            $OCF_NOT_RUNNING)
-                ocf_log info "$__OCF_ACTION - Starting the Standby ${OCF_RESOURCE_INSTANCE}."
+            # if not running, we try to start the slave, then promote it.
+            if [ $rc -eq  $OCF_NOT_RUNNING ]; then
+                ocf_log info "$__OCF_ACTION - Starting Standby ${OCF_RESOURCE_INSTANCE}."
                 pg_start
-                ;&
+                pg_is_running
+                rc=$?
+            fi
+
+            case $rc in
             $OCF_SUCCESS)
                 ocf_log debug "Monitor successful on Standby"
                 exit $OCF_NOT_RUNNING
