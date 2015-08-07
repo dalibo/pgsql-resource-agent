@@ -123,8 +123,7 @@ setlocale( LC_ALL, 'C' );
 ############################################################
 #### UTILS
 
-# FIXME
-# use env vars to define where to log ?
+# TODO use env vars to define where to log ?
 # available: HA_LOGFACILITY, HA_LOGFILE, HA_LOGD, PCMK_debug, HA_use_logd,
 #     HA_logfile, HA_logfacility, PCMK_use_logd, HA_DEBUGLOG, PCMK_logfile
 # see log funcs in OCF_ROOT/lib/heartbeat/ocf-shellfuncs 
@@ -138,6 +137,9 @@ sub ocf_log {
     return;
 }
 
+# Returns the local node name. This functions has been ported from the
+# ocf-shellfuncs library
+#
 sub ocf_local_nodename {
     my $name = '';
 
@@ -158,6 +160,8 @@ sub ocf_local_nodename {
     return $name;
 }
 
+# Run the given command as the "system_user" given as parameter
+# It basically fork and seteuid/setuid away from root.
 sub _runas {
     my $rc;
     my $pid;
@@ -210,7 +214,9 @@ sub _pg_ctl_status {
     return $rc;
 }
 
-# FIXME comment
+# Parse and return the current status of the local PostgreSQL cluster as
+# reported by its controldata file
+# WARNING: the status is NOT in case of crash.
 sub _controldata_state {
     my $status = qx{$PGCTRLDATA "$pgdata" 2>/dev/null};
 
@@ -219,6 +225,11 @@ sub _controldata_state {
     return $1;
 }
 
+# Create the recovery file based on the given template.
+# Given template MUST at least contains :
+#   standby_mode=on
+#   primary_conninfo='...'
+#   recovery_target_timeline = 'latest'
 sub _create_recovery_conf {
     my $fh;
     my (undef, undef, $uid, $gid) = getpwnam($system_user);
@@ -245,7 +256,7 @@ sub _create_recovery_conf {
     # This is ok to append the application_name at the end of the connstr.
     # Any existing one in the connstr will be overwritten 
     $recovery_conf =~ s/
-        ^\s*primary_conninfo\s*=\s*'(.*)'([#].*)?$
+        ^\s*primary_conninfo\s*=\s*'(.*)'(([#].*)?)$
        /primary_conninfo = '$1 application_name=$nodename' $2/mx;
 
     unless ( open( $fh, '>', "$pgdata/recovery.conf" ) ) {
@@ -308,13 +319,13 @@ sub _controldata {
         $state = _controldata_state();
     }
 
-    # If we reach this point, something went wrong with pg_controldata
-    # FIXME: better to raise a hard error at this point, like OCF_ERR_CONFIGURED ?
+    # If we reach this point, something went really wrong with this code or
+    # pg_controldata
     ocf_log( 'err',
         '_controldata: unable get instance "%s" state using pg_controldata.',
         $OCF_RESOURCE_INSTANCE );
 
-    return OCF_ERR_GENERIC;
+    return OCF_ERR_INSTALLED ;
 }
 
 
@@ -452,7 +463,7 @@ sub _check_lsn_diff {
 
     if ( $row_num == 0 ) {
         ocf_log( 'info', '_check_lsn_diff: No slave connected' );
-        return;
+        # return;
     }
 
     # for each slave connected, set their master score based on the row_number:
@@ -495,7 +506,6 @@ sub _check_lsn_diff {
     }
 
     return OCF_SUCCESS;
-    # FIXME will crm_master update trigger a promotion ?
 }
 
 
@@ -537,7 +547,8 @@ sub _confirm_role {
         }
         elsif ( $query_rc == 1 or $query_rc == 2 ) {
             # psql cound not connect to the instance
-            # FIXME raise an hard error here ?
+            # As pg_isready reported the instance was listening, this error
+            # could be a max_connection saturation. Just report a soft error
             ocf_log( 'err', '_confirm_role(%s): psql could not connect to instance "%s"',
                 $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
             return OCF_ERR_GENERIC;
@@ -556,7 +567,6 @@ sub _confirm_role {
     if ( $controldata_rc == OCF_NOT_RUNNING ) {
         # Something went wrong, the instance should not be listening if not
         # running !
-        # FIXME raise an hard error here ?
         ocf_log( 'err', '_confirm_role(%s): instance "%s" controldata shows that instance is not running, but the instance is listening',
             $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
         return OCF_ERR_GENERIC;
@@ -593,7 +603,6 @@ sub _confirm_stopped {
     if ( $pgctlstatus_rc == 0 ) {
         # The pid file exists and the process is available
         # That should not be the case, return an error
-        # FIXME raise an hard error at this point ?
         ocf_log( 'err',
             '_confirm_stopped(%d): instance "%s" is not listening, but the process referenced in postmaster.pid exists',
             $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
@@ -653,7 +662,7 @@ sub _confirm_stopped {
 #### OCF FUNCS
 
 
-sub ocf_meta_data() {
+sub ocf_meta_data {
     print qq{<?xml version="1.0"?>
         <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
         <resource-agent name="pgsqlsr">
@@ -748,8 +757,7 @@ sub ocf_meta_data() {
     return;
 }
 
-sub ocf_methods() {
-    # FIXME: check all methods are here
+sub ocf_methods {
     print q{
         start
         stop
@@ -926,17 +934,11 @@ sub pgsql_stop {
     #
 
     # try to quit with proper shutdown
-    # FIXME we should add a timeout in pg_ctl call, and try an immediate stop 
-    # after that
+    # TODO add a timeout in pg_ctl -m fast call, and immediate stop ??
+    # see http://www.linux-ha.org/doc/dev-guides/_literal_stop_literal_action.html
+    # I prefer having a node fencing in case of stop error than a silently
+    # corrupted database by switchover using -m immediate.
     $rc = _runas( $PGCTL, '-D', $pgdata, '-w', '-m', 'fast', 'stop' );
-
-    $state = _controldata();
-
-    # FIXME is it really ok to return SUCCESS if pg_ctl failed, but no pidfile
-    # and controldata says NOT_RUNNING ?
-    # Seems like it needs some comment about the logic here.
-    return OCF_SUCCESS if $rc == 1 and not -f $pidfile
-        and $state == OCF_NOT_RUNNING;
 
     # wait for the stop to finish
     if ( $rc == 0 ) {
@@ -956,7 +958,7 @@ sub pgsql_monitor {
     my $pgisready_rc;
     my $controldata_rc;
 
-    # FIXME why immediately et tis to 10 ?!
+    # TODO relax the CHECK_LEVEL when appropriate
     $OCF_CHECK_LEVEL = 10;
 
     ocf_log( 'debug', "pgsql_monitor($OCF_CHECK_LEVEL): monitor is a probe" ) if
@@ -1083,6 +1085,9 @@ sub pgsql_monitor {
 sub pgsql_demote {
     my $rc;
 
+    # we need high monitor accuracy
+    $OCF_CHECK_LEVEL = 20;
+
     $rc = pgsql_monitor();
 
     # Running as master. Normal, expected behavior.
@@ -1100,8 +1105,6 @@ sub pgsql_demote {
         # Alread running as slave. Nothing to do.
         ocf_log( 'debug', 'pgsql_demote: "%s" currently shut down',
             $OCF_RESOURCE_INSTANCE );
-            #return OCF_ERR_GENERIC;
-            #return OCF_NOT_RUNNING;
     }
     elsif ( $rc == OCF_ERR_CONFIGURED ) {
         # We actually prefer rising a hard or fatal error instead of leaving
@@ -1110,21 +1113,21 @@ sub pgsql_demote {
         return OCF_ERR_CONFIGURED;
     }
     else {
-        return OCF_ERR_INSTALLED;
+        return OCF_ERR_GENERIC;
     }
 
-    # FIXME we need to make sure at least one slave is connected!!
+    # TODO we need to make sure at least one slave is connected!!
 
-    # FIXME if the rsc is stopped instead of master, the ocf ra dev rsc advise
-    # to returns OCF_ERR_GENERIC, misleading the CRM in a loop where it computes
-    # transitions of demote(failing)->stop->start->promote actions until
-    # failcount == migration-threshold.
+    # WARNING if the resource state is stopped instead of master, the ocf ra dev
+    # rsc advise to returns OCF_ERR_GENERIC, misleading the CRM in a loop where
+    # it computes transitions of demote(failing)->stop->start->promote actions
+    # until failcount == migration-threshold.
     # This is a really ugly trick to keep going with the demode action if the
     # rsc is already stopped gracefully.
     # See discussion "CRM trying to demote a stopped resource" on
     # developers@clusterlabs.org
     unless ( $rc == OCF_NOT_RUNNING ) {
-        # WARNING: the instance **MUST** be stopped gracefully. Do **not** use
+        # WARNING the instance **MUST** be stopped gracefully. Do **not** use
         # pg_stop() or service or systemctl here as these commands might force-stop
         # the PostgreSQL instance using immediate after some timeout and return
         # success, which is misleading.
@@ -1138,7 +1141,6 @@ sub pgsql_demote {
         }
 
         # Double check that the instance is stopped correctly
-        # FIXME: Ask for a higher OCF_CHECK_LEVEL ?
         $rc = pgsql_monitor();
         unless ( $rc == OCF_NOT_RUNNING ) {
             ocf_log( 'err',
@@ -1190,8 +1192,7 @@ sub pgsql_promote {
             $OCF_RESOURCE_INSTANCE );
         return OCF_SUCCESS;
     }
-    elsif ( $rc == OCF_NOT_RUNNING ) {
-        # FIXME should not happen
+    elsif ( $rc == OCF_NOT_RUNNING ) { # INFO this is supposed not to happen
         # Currently not running. Need to start before promoting.
         ocf_log( 'info', 'pgsql_promote: "%s" currently not running, starting it',
             $OCF_RESOURCE_INSTANCE );
@@ -1213,9 +1214,14 @@ sub pgsql_promote {
     # At this point, the instance **MUST** be started as a slave
     #
 
-    # To avoid any race condition between the last monitor actions on slaves
-    # and the **real** most up-to-date slave, we recheck here the diff between
-    # the last primary known lsn and each slave to pick the best one.
+    # The slave to be promoted should have been picked by pacemaker based on
+    # its master score set by the old master during its last monitor. See
+    # pgsql_monitor/_check_lsn_diff subs.
+    # To avoid any race condition between the last monitor action on the master
+    # and the **real** most up-to-date slave, we recheck the diff between the
+    # last primary known lsn and each slave position to pick the best one.
+    # The best slave to promote have the biggest delta between its LSN and the
+    # primary last known LSN.
     #
     # If primary_node resource attribute has not been set, the cluster is
     # starting up, no need to compare slaves.
@@ -1225,11 +1231,14 @@ sub pgsql_promote {
     # slaves.
     unless ( $OCF_PRIMARY_NODE eq '' or $OCF_PRIMARY_NODE eq $nodename ) {
         my @partition_nodes = split /\s/ => qx{ $CRM_NODE --partition };
-        my $node_to_promote;
-        my $min_lsndiff;
+        my $node_to_promote = '';
+        my $max_lsndiff;
         my $node_lsndiff;
 
-        $min_lsndiff = qx{ $CRM_ATTRIBUTE --node $nodename \\
+        # The promotion occurring on the best known candidate by pacemaker
+        # since last working monitor on old master, this is supposed to be the
+        # max LSN diff
+        $max_lsndiff = qx{ $CRM_ATTRIBUTE -q --node $nodename \\
             --quiet --query --name lsn_diff };
         if ( $? != 0 ) {
             ocf_log( 'crit',
@@ -1237,8 +1246,7 @@ sub pgsql_promote {
             return OCF_ERR_GENERIC;
         }
     
-        # Parse the list of available nodes
-        # FIXME instead of crm_node, use a resource attribute set during 
+        # TODO instead of crm_node, use a resource attribute set during
         #   notify using $OCF_RESKEY_CRM_meta_notify_slave_uname and 
         #   $OCF_RESKEY_CRM_meta_notify_start_uname ?
         foreach my $node ( @partition_nodes ) {
@@ -1250,11 +1258,11 @@ sub pgsql_promote {
                 'pgsql_promote: comparing with "%s": lsn diff is %s',
                 $node, $node_lsndiff);
 
-            # Select the node that had the lower diff, if lower than the 
-            # current node diff
-            if ( $node_lsndiff ne '' and $node_lsndiff lt $min_lsndiff ) {
+            # If the current node have a bigger delta, select it as a best
+            # node to promote
+            if ( $node_lsndiff ne '' and $node_lsndiff gt $max_lsndiff ) {
                 $node_to_promote = $node;
-                $min_lsndiff     = $node_lsndiff;
+                $max_lsndiff     = $node_lsndiff;
                 ocf_log( 'debug',
                     'pgsql_promote: found %s as a better candidate to promote',
                     $node);
@@ -1274,9 +1282,9 @@ sub pgsql_promote {
             # set promotion candidate master score
             qx{ $CRM_MASTER --node "$node_to_promote" --update 1000 };
 
-            # We fail the promotion to trigger another promotion transition 
+            # We fail the promotion to trigger another promotion transition
             # with the new scores
-            # FIXME is there any other way at this point to trigger this 
+            # TODO is there any other way at this point to trigger this
             # without failing the promote action ?
             return OCF_ERR_GENERIC;
         }
@@ -1316,8 +1324,6 @@ sub pgsql_promote {
         # Set master score to 1001 for this node so it sticks to this role
         qx { $CRM_MASTER --update 1001 };
 
-        qx{ $CRM_ATTRIBUTE --node "$nodename" --name lsn_diff --delete };
-
         return OCF_SUCCESS;
     }
 
@@ -1354,20 +1360,18 @@ sub pgsql_notify {
         # Compute lsn difference with last known primary position.
         # On promote action, pgsql_promote check if the instance to be promoted
         # is the best one based on this diff.
-        # Note that if the master was stopped gracefully, the last received
-        # location from slaves will be superior to the primary last known lsn,
-        # leading to negative lsn_diff. But this is not a problem. This RA takes
-        # care of everything so a master resource recover action success. But if
-        # the master was shut down gracefully (outside of pacemaker) and do not
-        # come back, the slave with the minimal lsn_diff will be promoted, so
-        # negative ones are not a problem.
-        # 
-        # If this is the first promotion, last_primary_lsn will not be set
-        # in that case, there is no point to try computing this diff
+        #
+        # As we compare the last known master LSN with current position, the
+        # more bigger is the delta, the best candidate is the slave.
+
+        # If this is the first promotion, last_primary_lsn will not be set in
+        # that case, there is no point to try computing this diff
         if ( $last_primary_lsn ne '' ) {
-            my $query = qq{SELECT pg_xlog_location_diff(
-                '$last_primary_lsn',
-                pg_last_xlog_receive_location() ) };
+            my $query = qq{
+                SELECT pg_xlog_location_diff(
+                    pg_last_xlog_receive_location(), '$last_primary_lsn'
+                )
+            };
             my $lsn_diff = _query( $query );
 
             unless ( ref( $lsn_diff ) eq 'ARRAY' ) {
@@ -1392,10 +1396,13 @@ sub pgsql_notify {
     }
 
     elsif ( $OCF_notify_type_op eq 'post-promote' ) {
-        # FIXME do we need to do something else at this point ?
         ocf_log( 'info',
             'pgsql_notify: instance on node "%s" has been promoted',
             $OCF_notify_promote_uname );
+        # We have a new master (or old one recovered). Delete lsn_diff values
+        # on all nodes, the new masteers will set them back during its next
+        # monitor
+        qx{ $CRM_ATTRIBUTE --node "$nodename" --name lsn_diff --delete };
     }
 
     return OCF_SUCCESS;
