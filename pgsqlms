@@ -233,7 +233,8 @@ sub _controldata_state {
 sub _create_recovery_conf {
     my $fh;
     my (undef, undef, $uid, $gid) = getpwnam($system_user);
-    my $recovery_conf;
+    my $primary_conninfo = '';
+    my $recovery_conf    = '';
 
     # create the recovery.conf file to start as a standby
     # NOTE: the recovery.conf is supposed to be set up so the standby can
@@ -247,31 +248,34 @@ sub _create_recovery_conf {
             $recovery_tpl );
         exit OCF_ERR_CONFIGURED;
     }
-    {
-        local $/ = undef;
-        $recovery_conf = <$fh>;
+
+    while (my $line = <$fh>) {
+        chomp $line;
+        if ( $line =~ m/^\s*primary_conninfo\s*=\s*'([^']*)'/ ) {
+            $primary_conninfo = $1 if defined $1;
+            next;
+        }
+        $recovery_conf .= "$line\n";
     }
     close $fh;
 
-    # This is ok to append the application_name at the end of the connstr.
-    # Any existing one in the connstr will be overwritten 
-    $recovery_conf =~ s/
-        ^\s*primary_conninfo\s*=\s*'(.*)'(([#].*)?)$
-       /primary_conninfo = '$1 application_name=$nodename' $2/mx;
+    if ( $primary_conninfo eq '' ) {
+        ocf_log( 'crit', '_create_recovery_conf: no primary_conninfo in "%s"',
+            $recovery_conf );
+        exit OCF_ERR_CONFIGURED;
+    }
+
+    $primary_conninfo =~ s/(?:application_name)=[^\s]+//g;
+
+    $primary_conninfo .= " application_name=$nodename";
 
     unless ( open( $fh, '>', "$pgdata/recovery.conf" ) ) {
         ocf_log( 'crit', '_create_recovery_conf: Could not open file "%s"',
             "$pgdata/recovery.conf" );
         exit OCF_ERR_CONFIGURED;
     }
-    print $fh "$recovery_conf";
+    print $fh "$recovery_conf\nprimary_conninfo = '$primary_conninfo'";
     close $fh;
-
-    unless ( grep { /^primary_conninfo/m } $recovery_conf ) {
-        ocf_log( 'crit', '_create_recovery_conf: no primary_conninfo in "%s"',
-            $recovery_conf );
-        exit OCF_ERR_CONFIGURED;
-    }
 
     unless ( chown $uid, $gid, "$pgdata/recovery.conf" ) {
         ocf_log( 'crit', '_create_recovery_conf: Could not set owner of "%s"',
@@ -938,7 +942,11 @@ sub pgsql_stop {
     # see http://www.linux-ha.org/doc/dev-guides/_literal_stop_literal_action.html
     # I prefer having a node fencing in case of stop error than a silently
     # corrupted database by switchover using -m immediate.
-    $rc = _runas( $PGCTL, '-D', $pgdata, '-w', '-m', 'fast', 'stop' );
+
+    # We set a 10 minute timeout to pg_ctl so we'll hit the pacemaker one
+    # first.
+    $rc = _runas( $PGCTL, '-D', $pgdata, '-w', '--timeout', 600,
+        '-m', 'fast', 'stop' );
 
     # wait for the stop to finish
     if ( $rc == 0 ) {
@@ -1127,11 +1135,16 @@ sub pgsql_demote {
     # See discussion "CRM trying to demote a stopped resource" on
     # developers@clusterlabs.org
     unless ( $rc == OCF_NOT_RUNNING ) {
-        # WARNING the instance **MUST** be stopped gracefully. Do **not** use
-        # pg_stop() or service or systemctl here as these commands might force-stop
-        # the PostgreSQL instance using immediate after some timeout and return
-        # success, which is misleading.
-        $rc = _runas( $PGCTL, '-D', $pgdata, '-m', 'fast', '-w', 'stop' );
+        # WARNING the instance **MUST** be stopped gracefully.
+        # Do **not** use pg_stop() or service or systemctl here as these
+        # commands might force-stop the PostgreSQL instance using immediate
+        # after some timeout and return success, which is misleading.
+
+        # We set a 10 minute timeout to pg_ctl so we'll hit the pacemaker
+        # timeout stop command first
+        # TODO how to find the resource action timeout ?
+        $rc = _runas( $PGCTL, '--pgdata', $pgdata, '--mode', 'fast', '-w',
+            '--timeout', 600 , 'stop' );
 
         # no need to wait for stop to complete, this is handled in pg_ctl using -w
         unless ( $rc == 0 ) {
@@ -1240,6 +1253,8 @@ sub pgsql_promote {
         # max LSN diff
         $max_lsndiff = qx{ $CRM_ATTRIBUTE -q --node $nodename \\
             --quiet --query --name lsn_diff };
+        chomp $max_lsndiff;
+
         if ( $? != 0 ) {
             ocf_log( 'crit',
                 'pgsql_promote: can not get my last lsn diff with primary');
@@ -1254,6 +1269,8 @@ sub pgsql_promote {
 
             $node_lsndiff = qx{ $CRM_ATTRIBUTE -q --node "$node" \\
                 --query --name lsn_diff };
+            chomp $node_lsndiff;
+
             ocf_log( 'debug',
                 'pgsql_promote: comparing with "%s": lsn diff is %s',
                 $node, $node_lsndiff);
