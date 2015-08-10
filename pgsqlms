@@ -434,7 +434,7 @@ sub _check_lsn_diff {
         SELECT NULL, -1, 0, pg_current_xlog_location()
         UNION ALL
         SELECT application_name, diff,
-          row_number() OVER (ORDER BY diff DESC),
+          row_number() OVER (ORDER BY diff DESC, application_name DESC),
           pg_current_xlog_location()
         FROM (
           SELECT application_name, pg_xlog_location_diff(
