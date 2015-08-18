@@ -2,6 +2,8 @@
 # This program is open source, licensed under the PostgreSQL License.
 # For license terms, see the LICENSE file.
 #
+# FIXME describe requirements (PostgreSQL 9.3+, Pacemaker version, ...)
+#
 # Copyright (C) 2015: Jehan-Guillaume de Rorthais and Mael Rimbault
 
 =head1 pgsqlms
@@ -66,9 +68,9 @@ my $OCF_notify_master_uname   = $ENV{'OCF_RESKEY_CRM_meta_notify_master_uname'} 
 my $OCF_notify_slave_uname    = $ENV{'OCF_RESKEY_CRM_meta_notify_slave_uname'}       || '';
 my $OCF_notify_type_op        = "$OCF_notify_type-$OCF_notify_operation";
 
-# violently import requiered shell vars
-# Sadly, there's no perl module maintained across Linux distribs as opposed to 
-# the "ocf-shellfuncs" file for bash. 
+# Violently import requiered shell vars.
+# Sadly, there's no perl module maintained across Linux distribs as opposed to
+# the "ocf-shellfuncs" file for bash.
 my $_ocf_env = qx{
 : \${OCF_FUNCTIONS_DIR=$ENV{'OCF_ROOT'}/lib/heartbeat}
 . \${OCF_FUNCTIONS_DIR}/ocf-shellfuncs
@@ -109,24 +111,26 @@ my $CRM_ATTRIBUTE = "$HA_SBIN_DIR/crm_attribute -l reboot -t status";
 my $CRM_NODE      = "$HA_SBIN_DIR/crm_node";
 my $CRM_RESOURCE  = "$HA_SBIN_DIR/crm_resource";
 
-# global vars
+# Global vars
 my $nodename;
 my $exit_code = 0;
 my $logfile   = "/var/log/cluster/pgsqlms.log";
 my $log_fh;
 
 
-# this script expect english output, not random translations depending on
-# the system config
+# This script expect english output, not random translations depending on
+# the system config.
 setlocale( LC_ALL, 'C' );
 
 ############################################################
 #### UTILS
 
+# Define the logging policy, currently syslog only.
 # TODO use env vars to define where to log ?
-# available: HA_LOGFACILITY, HA_LOGFILE, HA_LOGD, PCMK_debug, HA_use_logd,
-#     HA_logfile, HA_logfacility, PCMK_use_logd, HA_DEBUGLOG, PCMK_logfile
-# see log funcs in OCF_ROOT/lib/heartbeat/ocf-shellfuncs 
+#   available: HA_LOGFACILITY, HA_LOGFILE, HA_LOGD, PCMK_debug, HA_use_logd,
+#   HA_logfile, HA_logfacility, PCMK_use_logd, HA_DEBUGLOG, PCMK_logfile
+#   see log funcs in OCF_ROOT/lib/heartbeat/ocf-shellfuncs
+#
 sub ocf_log {
     my $level    = shift;
     my $frmt     = shift;
@@ -137,18 +141,18 @@ sub ocf_log {
     return;
 }
 
-# Returns the local node name. This functions has been ported from the
-# ocf-shellfuncs library
+# Returns the local node name. This function has been ported from the
+# ocf-shellfuncs library.
 #
 sub ocf_local_nodename {
     my $name = '';
 
-    # try crm_node -n (available since pacemaker > 1.1.8)
+    # Try crm_node -n (available since pacemaker > 1.1.8)
     $name = qx{ $CRM_NODE -n 2>/dev/null };
     chomp $name;
     return $name if $? == 0 and $name ne '';
 
-    # fallback on uname -n if crm_node failed
+    # Fallback on uname -n if crm_node failed
     $name = qx{ uname -n 2>/dev/null };
     chomp $name;
 
@@ -160,8 +164,9 @@ sub ocf_local_nodename {
     return $name;
 }
 
-# Run the given command as the "system_user" given as parameter
-# It basically fork and seteuid/setuid away from root.
+# Run the given command as the "system_user" given as parameter.
+# It basically forks and seteuid/setuid away from root.
+#
 sub _runas {
     my $rc;
     my $pid;
@@ -187,14 +192,14 @@ sub _runas {
     return $rc;
 }
 
-# Check if instance is listening on the given host/port
+# Check if instance is listening on the given host/port.
 #
 sub _pg_isready {
     my $rc = _runas( $PGISREADY, '-h', $pghost, '-p', $pgport );
 
-    # possible error codes:
+    # Possible error codes:
     #   1: ping rejected (usually when instance is in startup, in crash
-    #      recovery , in warm standby or a shutdown is in progress)
+    #      recovery, in warm standby, or when a shutdown is in progress)
     #   2: no response, usually means the instance is down
     #   3: no attempt, probably a syntax error, should not happen
     return $rc;
@@ -202,21 +207,23 @@ sub _pg_isready {
 
 
 # Check the postmaster.pid file and the postmaster process.
-# WARNING: we do not distinct the scenario where postmaster.pid does not exists
-# and the process is still alive. It should be ok though, as this is considered
-# as a hard error from monitor.
+# WARNING: we do not distinguish the scenario where postmaster.pid does not
+# exist from the scenario where the process is still alive. It should be ok
+# though, as this is considered a hard error from monitor.
+#
 sub _pg_ctl_status {
     my $rc = _runas( $PGCTL, '-D', $pgdata, 'status' );
 
-    # possible error codes:
-    #   3: postmaster.pid file does not exists OR it does but the process 
-    #      with the pid found in the file is not alive
+    # Possible error codes:
+    #   3: postmaster.pid file does not exist OR it does but the process
+    #      with the PID found in the file is not alive
     return $rc;
 }
 
-# Parse and return the current status of the local PostgreSQL cluster as
+# Parse and return the current status of the local PostgreSQL instance as
 # reported by its controldata file
-# WARNING: the status is NOT in case of crash.
+# WARNING: the status is NOT updated in case of crash.
+#
 sub _controldata_state {
     my $status = qx{$PGCTRLDATA "$pgdata" 2>/dev/null};
 
@@ -226,29 +233,40 @@ sub _controldata_state {
 }
 
 # Create the recovery file based on the given template.
-# Given template MUST at least contains :
+# Given template MUST at least contain:
 #   standby_mode=on
 #   primary_conninfo='...'
 #   recovery_target_timeline = 'latest'
+#
+# The "primary_conninfo" string must reference the virtual IP address set up
+# to be associated with the master PostgreSQL resource.
+#
 sub _create_recovery_conf {
     my $fh;
     my (undef, undef, $uid, $gid) = getpwnam($system_user);
     my $primary_conninfo = '';
     my $recovery_conf    = '';
+    my $recovery_file    = "$pgdata/recovery.conf";
 
-    # create the recovery.conf file to start as a standby
-    # NOTE: the recovery.conf is supposed to be set up so the standby can
-    # connect to the instance in production. As there is no instance in
-    # production on start, standbys will bail about failing to connect to
-    # the primary.
+    ocf_log( 'debug', '_create_recovery_conf: get replication configuration from the template file "%s"',
+        $recovery_tpl );
+
+    # Create the recovery.conf file to start the instance as a secondary.
+    # NOTE: the recovery.conf is supposed to be set up so the secondary can
+    # connect to the primary instance, usually using a virtual IP address.
+    # As there is no primary instance available at startup, secondaries will
+    # complain about failing to connect.
     # As we can not reload a recovery.conf file on a standby without restarting
     # it, we will leave with this.
+    # FIXME how would the reload help us in this case ?
     unless ( defined open( $fh, '<', $recovery_tpl ) ) {
         ocf_log( 'crit', '_create_recovery_conf: could not open file "%s"',
             $recovery_tpl );
         exit OCF_ERR_CONFIGURED;
     }
 
+    # Copy all parameters from the template file, except for the connection
+    # string, whose value is extracted so we can adapt it.
     while (my $line = <$fh>) {
         chomp $line;
         if ( $line =~ m/^\s*primary_conninfo\s*=\s*'([^']*)'/ ) {
@@ -265,28 +283,39 @@ sub _create_recovery_conf {
         exit OCF_ERR_CONFIGURED;
     }
 
+    # Remove any existing "application_name" configuration from the connection
+    # string.
     $primary_conninfo =~ s/(?:application_name)=[^\s]+//g;
 
+    # Add "application_name" configuration with the current node's name to the
+    # connection string so it shows in the "pg_stat_replication" view.
     $primary_conninfo .= " application_name=$nodename";
 
-    unless ( open( $fh, '>', "$pgdata/recovery.conf" ) ) {
+    ocf_log( 'debug', '_create_recovery_conf: write the replication configuration to "%s" file',
+        $recovery_file );
+
+    unless ( open( $fh, '>', $recovery_file ) ) {
         ocf_log( 'crit', '_create_recovery_conf: Could not open file "%s"',
-            "$pgdata/recovery.conf" );
+            $recovery_file );
         exit OCF_ERR_CONFIGURED;
     }
+
+    # Write the new recovery.conf file using configuration from the template
+    # file and the modified connection string for "primary_conninfo".
     print $fh "$recovery_conf\nprimary_conninfo = '$primary_conninfo'";
+
     close $fh;
 
-    unless ( chown $uid, $gid, "$pgdata/recovery.conf" ) {
+    unless ( chown $uid, $gid, $recovery_file ) {
         ocf_log( 'crit', '_create_recovery_conf: Could not set owner of "%s"',
-            "$pgdata/recovery.conf" );
+            $recovery_file );
         exit OCF_ERR_CONFIGURED;
     };
 }
 
-# Use pg_controldata to check if the state of the PostgreSQL server. This 
-# function return codes depending on this state, so we can find wether the 
-# instance is Primary or Secondary, or use it to detect any inconsistency
+# Use pg_controldata to check the state of the PostgreSQL server. This
+# function returns codes depending on this state, so we can find wether the
+# instance is a primary or a secondary, or use it to detect any inconsistency
 # that could indicate the instance has crashed.
 #
 sub _controldata {
@@ -296,26 +325,25 @@ sub _controldata {
         ocf_log( 'debug', '_controldata: instance "%s" state is "%s"',
             $OCF_RESOURCE_INSTANCE, $state );
 
-        # Instance should be running as a Primary.
+        # Instance should be running as a primary.
         return OCF_RUNNING_MASTER if $state eq "in production";
 
-        # Instance should be running as a Secondary.
-        # This state includes Warm Standby (rejects connections
-        # attempts, including pg_isready)
+        # Instance should be running as a secondary.
+        # This state includes warm standby (rejects connections attempts,
+        # including pg_isready)
         return OCF_SUCCESS if $state eq "in archive recovery";
 
-        
+
         # The instance should be stopped.
-        # We don't care if it was Primary or Secondary before, because
-        # we always start instances as Secondaries, and then promotes
-        # if necessary.
+        # We don't care if it was a primary or secondary before, because we
+        # always start instances as secondaries, and then promote if necessary.
         return OCF_NOT_RUNNING if $state eq "shut down"
             or $state eq "shut down in recovery";
 
-        # The state is "in crash recovery", "starting up" or 
-        # "shutting down".
-        # This state should be transitional, so we wait and loop to 
-        # check if it changes.
+        # The state is "in crash recovery", "starting up" or "shutting down".
+        # This state should be transitional, so we wait and loop to check if
+        # it changes.
+        # If it does not, pacemaker will eventually abort with a timeout.
         ocf_log( 'debug',
             '_controldata: waiting for transitionnal state "%s" to finish',
             $state );
@@ -324,7 +352,7 @@ sub _controldata {
     }
 
     # If we reach this point, something went really wrong with this code or
-    # pg_controldata
+    # pg_controldata.
     ocf_log( 'err',
         '_controldata: unable get instance "%s" state using pg_controldata.',
         $OCF_RESOURCE_INSTANCE );
@@ -333,10 +361,10 @@ sub _controldata {
 }
 
 
-# Run a query using psql
+# Run a query using psql.
 #
-# Returns an array with psql return code as first element and the result as
-# second one.
+# This function returns an array with psql return code as first element and
+# the result as second one.
 #
 sub _query {
     my $query        = shift;
@@ -363,10 +391,11 @@ sub _query {
     print $tmpfile "$query";
     chmod 0644, $tmpfile;
 
-    # change the effective user to the given system_user so after forking
+    # Change the effective user to the given system_user so after forking
     # the given uid to the process should allow psql to connect w/o password
     $> = $postgres_uid;
-    # forking + piping
+
+    # Forking + piping
     $pid = open(my $KID, "-|");
 
     if ( $pid == 0 ) { # child
@@ -385,7 +414,7 @@ sub _query {
     close $KID;
     $rc = $? >> 8;
 
-    ocf_log( 'debug', '_query: psql rc %d', $rc);
+    ocf_log( 'debug', '_query: psql return code: %d', $rc);
 
     if ( defined $ans ) {
         chop $ans;
@@ -398,7 +427,7 @@ sub _query {
 
     return $rc if $rc != 0;
 
-    # possible error codes:
+    # Possible error codes:
     #   1: failed to get resources (memory, missing file, ...)
     #   2: unable to connect
     #   3: query failed
@@ -406,17 +435,25 @@ sub _query {
 }
 
 
-# Check lsn diff of all slaves with the current master, and adapt their master
-# score so that the instance with the lower diff will be candidate for promotion
+# Check LSN diff of all secondaries with the current primary, and adapt their
+# master score so that the instance with the lowest diff will be the selected
+# candidate for promotion.
+# NOTE: we cannot directly use the lsn_diff value as a score, as Pacemaker
+# considers any value of 1,000,000 or more as INFINITY
 #
-# This sub is supposed to be executed only on a master
+# This sub is supposed to be executed from a master monitor action.
+#
 sub _check_lsn_diff {
     my $row_num;
     my $query;
     my $rs;
-    # this is used to detect non connected slave
+
+    # Call crm_node to exclude nodes that are not part of the cluster at this
+    # point.
     my $partition_nodes = qx{ $CRM_NODE --partition };
 
+    # If the primary node attribute has not been set, then no promotion has
+    # occurred yet, so we do not need to check LSN diff.
     if ( not defined $OCF_PRIMARY_NODE or $OCF_PRIMARY_NODE eq '' ) {
         ocf_log( 'debug',
             '_check_lsn_diff: primary_node attribute not set, there was probably no promotion yet'
@@ -425,11 +462,11 @@ sub _check_lsn_diff {
         return OCF_SUCCESS;
     }
 
-    # If the primary node attribute has been set, then at least one promotion
-    # has occurred, so we need to check lsn diff
-
-    # We order by diff DESC so the highest row_number should be attributed to
-    # the node with minimal diff
+    # We check the LSN diff by querying the "pg_stat_replication" view, which
+    # has one line for each secondary connected through streaming replication.
+    # We order the result so the highest row_number should be attributed to
+    # the node with minimal diff, or the lowest node name (alphanumeric sort)
+    # in case of equality.
     $query = q{
         SELECT NULL, -1, 0, pg_current_xlog_location()
         UNION ALL
@@ -448,11 +485,13 @@ sub _check_lsn_diff {
 
     if ( ref( $rs ) eq 'SCALAR' ) {
         ocf_log( 'err',
-            '_check_lsn_diff: query to get location diffs failed (%d)',
+            '_check_lsn_diff: query to get LSN diffs failed (%d)',
             $rs );
         exit OCF_ERR_GENERIC;
     }
 
+    # We update the cluster resource "last_primary_lsn" using the current
+    # primary LSN position we get in the first line from the query resultset.
     qx{ $CRM_RESOURCE --resource "$OCF_RESOURCE_INSTANCE" \\
         --set-parameter last_primary_lsn --parameter-value "$rs->[0][3]" };
     if ( $? != 0 ) {
@@ -465,15 +504,21 @@ sub _check_lsn_diff {
 
     $row_num = scalar @{ $rs };
 
+    # If there is no row left at this point, it means that there is no
+    # secondary instance connected.
+    # FIXME should this raise a warning message ?
     if ( $row_num == 0 ) {
-        ocf_log( 'info', '_check_lsn_diff: No slave connected' );
+        ocf_log( 'info', '_check_lsn_diff: No secondary connected' );
         # return;
     }
 
-    # for each slave connected, set their master score based on the row_number:
-    # the highest row_number is the best candidate to promote
+    # For each secondary connected, set their master score based on the
+    # row_number: the highest row_number is the best candidate to promotion.
+    # FIXME avoid updating scores if there was no change with previous scores ?
     while ( my $row = shift @{ $rs } ) {
-        # Update lsn_diff node attribute for this node
+
+        # Update "lsn_diff" node attribute for this node
+        # FIXME why should the master set "lsn_diff" during its monitor ?
         qx{ $CRM_ATTRIBUTE --node "$row->[0]" --name lsn_diff \\
             --update "$row->[1]" };
 
@@ -481,6 +526,8 @@ sub _check_lsn_diff {
                 '_check_lsn_diff: checking if "%s" is the best candidate to promotion',
                 $row->[0] );
 
+        # If this is the last line from the resultset, then this node is the
+        # best candidate, thus it receives the highest score.
         if ( $row->[2] == $row_num ) {
             ocf_log( 'info',
                 '_check_lsn_diff: "%s" is the best candidate to promotion, set score to 1000',
@@ -488,24 +535,31 @@ sub _check_lsn_diff {
             qx{ $CRM_MASTER --node "$row->[0]" --update 1000 };
         }
         else {
+            # The other nodes all receive the same score
+            # FIXME adapt this so each node receives a score based on their
+            #   rownum.
             ocf_log( 'info',
                 '_check_lsn_diff: "%s" is not a candidate to promotion, set score to 1',
                 $row->[0] );
             qx{ $CRM_MASTER --node "$row->[0]" --update 1 };
         }
 
-        # remove this node from known host in the cluster
+        # Remove this node from the known nodes list.
         $partition_nodes =~ s/(?:^|\s)$row->[0](?:\s|$)/ /g;
     }
 
     $partition_nodes =~ s/\s$nodename\s/ /g;
     $partition_nodes =~ s/(?:^\s+)|(?:\s+$)//g;
 
+    # If there are still nodes in "partition_nodes", it means there is no
+    # corresponding line in "pg_stat_replication".
     foreach my $node (split /\s/ => $partition_nodes) {
+        # Exclude the current node.
+        # FIXME should not be possible due to previous substitution
         next if $node eq $nodename;
 
         ocf_log( 'warning',
-            "_check_lsn_diff: $node is not connected to the master, set score to 0" );
+            "_check_lsn_diff: $node is not connected to the primary, set score to 0" );
         qx{ $CRM_MASTER --node "$node" --update 0 };
     }
 
@@ -513,15 +567,15 @@ sub _check_lsn_diff {
 }
 
 
-# Checks to confirm if the instance is really started as _pg_isready stated and
-# check if the instance is Primary or Secondary
+# Check to confirm if the instance is really started as _pg_isready stated and
+# check if the instance is primary or secondary.
 #
 sub _confirm_role {
     my $query_rc;
     my $controldata_rc;
 
     if ( $OCF_CHECK_LEVEL >= 10 ) {
-        # Hard check, call psql and pg_is_in_recovery(), and check lsn diff
+        # Hard check, call psql and pg_is_in_recovery(), and check LSN diff
 
         my $is_in_recovery = _query( "SELECT pg_is_in_recovery()" );
         $query_rc = ( ref( $is_in_recovery ) eq 'ARRAY' ? 0 : $is_in_recovery);
@@ -531,28 +585,28 @@ sub _confirm_role {
         ocf_log( 'debug', "_confirm_role($OCF_CHECK_LEVEL): hard checking $is_in_recovery $query_rc");
 
         if ( $query_rc == 0 ) {
-            # The query was executed, check the result
+            # The query was executed, check the result.
             if ( $is_in_recovery eq 't' ) {
-                # The instance is a Secondary.
-                ocf_log( 'debug', "_confirm_role($OCF_CHECK_LEVEL): instance $OCF_RESOURCE_INSTANCE is a Secondary");
+                # The instance is a secondary.
+                ocf_log( 'debug', "_confirm_role($OCF_CHECK_LEVEL): instance $OCF_RESOURCE_INSTANCE is a secondary");
                 return OCF_SUCCESS;
             }
             elsif ( $is_in_recovery eq 'f' ) {
-                # The instance is a Primary.
-                ocf_log( 'debug', "_confirm_role($OCF_CHECK_LEVEL): instance $OCF_RESOURCE_INSTANCE is a Primary");
+                # The instance is a primary.
+                ocf_log( 'debug', "_confirm_role($OCF_CHECK_LEVEL): instance $OCF_RESOURCE_INSTANCE is a primary");
                 # Check lsn diff with current slaves if any
                 _check_lsn_diff();
                 return OCF_RUNNING_MASTER;
             }
             # This should not happen, raise a hard configuration error.
-            ocf_log( 'err', '_confirm_role(%d): unexpected result from query to check if "%s" is a Primary or a Secondary: "%s"',
+            ocf_log( 'err', '_confirm_role(%d): unexpected result from query to check if "%s" is a primary or a secondary: "%s"',
                 $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE, $is_in_recovery );
             return OCF_ERR_CONFIGURED;
         }
         elsif ( $query_rc == 1 or $query_rc == 2 ) {
-            # psql cound not connect to the instance
+            # psql cound not connect to the instance.
             # As pg_isready reported the instance was listening, this error
-            # could be a max_connection saturation. Just report a soft error
+            # could be a max_connection saturation. Just report a soft error.
             ocf_log( 'err', '_confirm_role(%s): psql could not connect to instance "%s"',
                 $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
             return OCF_ERR_GENERIC;
@@ -560,13 +614,13 @@ sub _confirm_role {
         elsif ( $query_rc == 3 ) {
             # The query failed.
             # This should not happen, raise a hard configuration error.
-            ocf_log( 'err', '_confirm_role(%s): the query to check if instance "%s"is a Primary or a Secondary failed',
+            ocf_log( 'err', '_confirm_role(%s): the query to check if instance "%s"is a primary or a secondary failed',
                 $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
             return OCF_ERR_CONFIGURED;
         }
     }
 
-    # Soft check, call pg_controldata to check wether Primary or Secondary
+    # Soft check, call pg_controldata to check wether primary or secondary.
     $controldata_rc = _controldata();
     if ( $controldata_rc == OCF_NOT_RUNNING ) {
         # Something went wrong, the instance should not be listening if not
@@ -576,79 +630,79 @@ sub _confirm_role {
         return OCF_ERR_GENERIC;
     }
     elsif ( $controldata_rc == OCF_RUNNING_MASTER ) {
-        # The running instance is a Primary
-        ocf_log( 'debug', '_confirm_role(%s): instance "%s" is a Primary',
+        # The running instance is a primary.
+        ocf_log( 'debug', '_confirm_role(%s): instance "%s" is a primary',
             $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
         return OCF_RUNNING_MASTER;
     }
     elsif ( $controldata_rc == OCF_SUCCESS ) {
-        # The running instance is a Secondary
-        ocf_log( 'debug', '_confirm_role(%s): instance "%s" is a Secondary',
+        # The running instance is a secondary.
+        ocf_log( 'debug', '_confirm_role(%s): instance "%s" is a secondary',
             $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
         return OCF_SUCCESS;
     }
 
-    # We should not get here, something went wrong
+    # We should not get here, something went wrong.
     ocf_log( 'err', '_confirm_role(%s): could not get instance "%s" status from controldata (returned: %d)',
         $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE, $controldata_rc );
     return $controldata_rc;
 }
 
 
-# Checks to confirm if the instance is really stopped as _pg_isready stated
+# Check to confirm if the instance is really stopped as _pg_isready stated
 # and if it was propertly shut down.
 #
 sub _confirm_stopped {
     my $pgctlstatus_rc;
     my $controldata_rc;
 
+    # Check the postmaster process status.
     $pgctlstatus_rc = _pg_ctl_status();
 
     if ( $pgctlstatus_rc == 0 ) {
-        # The pid file exists and the process is available
-        # That should not be the case, return an error
+        # The PID file exists and the process is available.
+        # That should not be the case, return an error.
         ocf_log( 'err',
             '_confirm_stopped(%d): instance "%s" is not listening, but the process referenced in postmaster.pid exists',
             $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
         return OCF_ERR_GENERIC;
     }
 
-    # The pid file does not exists or the process is not available
+    # The PID file does not exist or the process is not available.
     ocf_log( 'debug',
         '_confirm_stopped(%d): no postmaster process found for instance "%s"',
         $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
 
     if ( -f "$pgdata/backup_label" ) {
-        # We are probably on a freshly built standby that never start yet.
+        # We are probably on a freshly built secondary that was not started yet.
         ocf_log( 'debug',
-            '_confirm_stopped(%d): backup_label file exists: probably on a never started standby',
+            '_confirm_stopped(%d): backup_label file exists: probably on a never started secondary',
             $OCF_CHECK_LEVEL );
         return OCF_NOT_RUNNING;
     }
 
-    # Continue the check with pg_controldata
+    # Continue the check with pg_controldata.
     $controldata_rc = _controldata();
     if ( $controldata_rc == OCF_RUNNING_MASTER ) {
-        # The controldata has not been updated to "shutdown"
-        # It should mean we had a crash on a Primary instance
+        # The controldata has not been updated to "shutdown".
+        # It should mean we had a crash on a primary instance.
         ocf_log( 'err',
-            '_confirm_stopped(%d): instance "%s" controldata indicates a running Primary instance, the instance has probably crashed',
+            '_confirm_stopped(%d): instance "%s" controldata indicates a running primary instance, the instance has probably crashed',
             $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
         return OCF_FAILED_MASTER;
     }
     elsif ( $controldata_rc == OCF_SUCCESS ) {
-        # The controldata has not been updated to "shutdown in recovery"
-        # It should mean we had a crash on a Secondary instance
-        # There is no "FAILED_SLAVE" return code, so we return a 
-        # generic error
+        # The controldata has not been updated to "shutdown in recovery".
+        # It should mean we had a crash on a secondary instance.
+        # There is no "FAILED_SLAVE" return code, so we return a generic error.
         ocf_log( 'err',
-            '_confirm_stopped(%d): instance "%s" controldata indicates a running Secondary instance, the instance has probably crashed',
+            '_confirm_stopped(%d): instance "%s" controldata indicates a running secondary instance, the instance has probably crashed',
             $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
         return OCF_ERR_GENERIC;
     }
     elsif ( $controldata_rc == OCF_NOT_RUNNING ) {
-        # The controldata state is consistent, the instance was
-        # probably propertly shut down.
+        # The controldata state is consistent, the instance was probably
+        # propertly shut down.
         ocf_log( 'debug', '_confirm_stopped(%d): instance "%s" controldata indicates that the instance was propertly shut down',
             $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
         return OCF_NOT_RUNNING;
@@ -687,7 +741,7 @@ sub ocf_meta_data {
 
             <parameter name="bindir" unique="0" required="0">
               <longdesc lang="en">
-                Path to the directory storing the PostgreSQL binaries. The agent uses pg_controldata and pg_ctl.
+                Path to the directory storing the PostgreSQL binaries. The agent uses psql, pg_isready, pg_controldata and pg_ctl.
               </longdesc>
               <shortdesc lang="en">Path to the PostgreSQL binaries</shortdesc>
               <content type="string" default="$bindir_default" />
@@ -811,7 +865,7 @@ sub pgsql_validate_all {
     }
 
     # check system user
-    unless ( defined getpwnam $system_user ) { 
+    unless ( defined getpwnam $system_user ) {
         ocf_log( 'crit', 'System user "%s" does not exist', $system_user );
         exit OCF_ERR_CONFIGURED;
     }
@@ -840,7 +894,8 @@ sub pgsql_validate_all {
 }
 
 
-# Start the PostgreSQL instance as a *slave*
+# Start the PostgreSQL instance as a *secondary*
+#
 sub pgsql_start {
     my $fh;
     my $rc;
@@ -850,8 +905,8 @@ sub pgsql_start {
     $OCF_CHECK_LEVEL = 20;
 
     $rc = pgsql_monitor();
-    # instance must be running as slave or being stopped
-    # anything else is an error
+    # Instance must be running as secondary or being stopped.
+    # Anything else is an error.
     if ( $rc == OCF_SUCCESS ) {
         ocf_log( 'info', 'pgsql_start: instance "%s" already started',
             $OCF_RESOURCE_INSTANCE );
@@ -865,31 +920,37 @@ sub pgsql_start {
     }
 
     #
-    # From here, the instance is NOT running for sure
+    # From here, the instance is NOT running for sure.
     #
 
+    ocf_log( 'debug', 'pgsql_start: instance "%s" is not running, starting it as a secondary',
+        $OCF_RESOURCE_INSTANCE );
+
+    # Create recovery.conf from the template file.
     _create_recovery_conf();
 
+    # Start the instance as a secondary.
     $rc = _runas( $PGCTL, '-D', $pgdata, '-w', 'start' );
 
-    # wait for the start to finish
     if ( $rc == 0 ) {
 
+        # Wait for the start to finish.
         sleep 1 while ( $rc = pgsql_monitor() ) == OCF_NOT_RUNNING;
 
         if ( $rc == OCF_SUCCESS ) {
             ocf_log( 'info', 'pgsql_start: instance "%s" started',
                 $OCF_RESOURCE_INSTANCE );
 
-            # if the action is actually a start, set the promotion score to 1
-            # so one node can be promoted on cluster startup
+            # If the action is actually a start, set the promotion score to 1
+            # so one node can be promoted at cluster startup.
             # HINT: use a location preference in your conf!
             if ( $OCF_ACTION eq "start" ) {
-                # In case of recovery for a Master, some version of Pacemaker
-                # do a demote->stop->start->promote sequence. We do not want the
-                # Master to recover to decrease its score to 1 in this scenario.
+                # In case of recovery for a primary, some versions of Pacemaker
+                # do a demote->stop->start->promote sequence. We do not want
+                # the recovered primary to decrease its score to 1 in this
+                # scenario.
                 unless ( $nodename eq $OCF_PRIMARY_NODE ) {
-                    # set master score to 1 so the node can be promoted
+                    # Set master score to 1 so the node can be promoted.
                     ocf_log( 'debug', "pgsql_start: instance started as a secondary, set master score to 1.");
                     qx{ $CRM_MASTER --update 1 };
                 }
@@ -912,6 +973,7 @@ sub pgsql_start {
 }
 
 # Stop the PostgreSQL instance
+#
 sub pgsql_stop {
     my $rc;
     my $state;
@@ -919,8 +981,8 @@ sub pgsql_stop {
 
     $OCF_CHECK_LEVEL = 20;
 
-    # instance must be running as slave or master or being stopped
-    # anything else is an error
+    # Instance must be running as secondary or primary or being stopped.
+    # Anything else is an error.
     $rc = pgsql_monitor();
     if ( $rc == OCF_NOT_RUNNING ) {
         ocf_log( 'info', 'pgsql_stop: instance "%s" already stopped',
@@ -934,22 +996,22 @@ sub pgsql_stop {
     }
 
     #
-    # From here, the instance is running for sure
+    # From here, the instance is running for sure.
     #
 
-    # try to quit with proper shutdown
-    # TODO add a timeout in pg_ctl -m fast call, and immediate stop ??
-    # see http://www.linux-ha.org/doc/dev-guides/_literal_stop_literal_action.html
-    # I prefer having a node fencing in case of stop error than a silently
-    # corrupted database by switchover using -m immediate.
+    ocf_log( 'debug', 'pgsql_stop: instance "%s" is running, stopping it',
+        $OCF_RESOURCE_INSTANCE );
 
-    # We set a 10 minute timeout to pg_ctl so we'll hit the pacemaker one
+    # Try to quit with proper shutdown.
+    # We set a 10 minutes timeout to pg_ctl so we'll hit the pacemaker one
     # first.
+    # TODO how to find the resource action timeout ?
     $rc = _runas( $PGCTL, '-D', $pgdata, '-w', '--timeout', 600,
         '-m', 'fast', 'stop' );
 
-    # wait for the stop to finish
     if ( $rc == 0 ) {
+
+        # Wait for the stop to finish.
         sleep 1 while ( $rc = pgsql_monitor() ) != OCF_NOT_RUNNING ;
 
         ocf_log( 'info', 'pgsql_stop: instance $OCF_RESOURCE_INSTANCE stopped' );
@@ -962,23 +1024,23 @@ sub pgsql_stop {
 }
 
 # Monitor the PostgreSQL instance
+#
 sub pgsql_monitor {
     my $pgisready_rc;
     my $controldata_rc;
 
-    # TODO relax the CHECK_LEVEL when appropriate
     $OCF_CHECK_LEVEL = 10;
 
     ocf_log( 'debug', "pgsql_monitor($OCF_CHECK_LEVEL): monitor is a probe" ) if
         $OCF_is_probe;
 
-    # First check, verify if the instance is listening
+    # First check, verify if the instance is listening.
     $pgisready_rc = _pg_isready();
 
     if ( $pgisready_rc == 0 ) {
-        # The instance is listening
-        # We confirm that the instance is up and get if it is a Primary or a
-        # Secondary using pg_controldata (OCF_CHECK_LEVEL < 10) or psql and 
+        # The instance is listening.
+        # We confirm that the instance is up and get if it is a primary or a
+        # secondary using pg_controldata (OCF_CHECK_LEVEL < 10) or psql and
         # pg_is_in_recovery() (OCF_CHECK_LEVEL >= 10).
         ocf_log( 'debug', 'pgsql_monitor(%d): instance "%s" is listening',
             $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
@@ -992,26 +1054,26 @@ sub pgsql_monitor {
         #   - during shutdown
         #   - during crash recovery
         #   - if instance is a warm standby
-        # Except for the Warm standby case, this should be a transitional state
-        # We try to confirm using pg_controldata
+        # Except for the warm standby case, this should be a transitional state.
+        # We try to confirm using pg_controldata.
         ocf_log( 'debug',
             'pgsql_monitor(%d): instance "%s" rejects connections - checking again...',
             $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
         $controldata_rc = _controldata();
-        
+
         if ( $controldata_rc == OCF_RUNNING_MASTER
             or $controldata_rc == OCF_SUCCESS
         ) {
-            # This state indicates that pg_isready check should succeed
-            # We check again
+            # This state indicates that pg_isready check should succeed.
+            # We check again.
             ocf_log( 'debug', 'pgsql_monitor(%d): instance "%s" controldata shows a running status',
                 $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
 
             $pgisready_rc = _pg_isready();
             if ( $pgisready_rc == 0 ) {
-                # Consistent with pg_controdata output
-                # We can check if the instance is Primary or Secondary using 
-                # pg_controldata (OCF_CHECK_LEVEL < 10) or psql and 
+                # Consistent with pg_controdata output.
+                # We can check if the instance is primary or secondary using
+                # pg_controldata (OCF_CHECK_LEVEL < 10) or psql and
                 # pg_is_in_recovery() (OCF_CHECK_LEVEL >= 10).
                 ocf_log( 'debug', 'pgsql_monitor(%d): instance "%s" is listening',
                     $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
@@ -1019,8 +1081,8 @@ sub pgsql_monitor {
             }
 
             # Still not consistent, raise an error.
-            # Note: if the instance is a Warm Standby, we end here.
-            # FIXME raise an hard error here ?
+            # NOTE: if the instance is a warm standby, we end here.
+            # TODO raise an hard error here ?
             ocf_log( 'err',
                 'pgsql_monitor(%d): instance "%s" controldata is not consistent with pg_isready (returned: %d)',
                 $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE, $pgisready_rc );
@@ -1029,20 +1091,20 @@ sub pgsql_monitor {
         }
 
         if ( $controldata_rc == OCF_NOT_RUNNING ) {
-            # This state indicates that pg_isready check should fail with rc 2
-            # We check again
+            # This state indicates that pg_isready check should fail with rc 2.
+            # We check again.
             $pgisready_rc = _pg_isready();
             if ( $pgisready_rc == 2 ) {
-                # Consistent with pg_controdata output
+                # Consistent with pg_controdata output.
                 # We check the process status using pg_ctl status and check
-                # if it was propertly shut down using pg_controldata
+                # if it was propertly shut down using pg_controldata.
                 ocf_log( 'debug',
                     'pgsql_monitor(%d): instance "%s" is not listening',
                     $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
                 return _confirm_stopped();
             }
             # Still not consistent, raise an error.
-            # FIXME raise an hard error here ?
+            # TODO raise an hard error here ?
             ocf_log( 'err',
                 'pgsql_monitor(%d): instance "%s" controldata is not consistent with pg_isready (returned: %d)',
                 $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE, $pgisready_rc );
@@ -1059,17 +1121,17 @@ sub pgsql_monitor {
     }
 
     elsif ( $pgisready_rc == 2 ) {
-        # The instance is not listening
+        # The instance is not listening.
         # We check the process status using pg_ctl status and check
-        # if it was propertly shut down using pg_controldata
+        # if it was propertly shut down using pg_controldata.
         ocf_log( 'debug', 'pgsql_monitor(%d): instance "%s" is not listening',
             $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
         return _confirm_stopped();
     }
 
     elsif ( $pgisready_rc == 3 ) {
-        # No attempt was done, probably a syntax error
-        # Hard configuration error, we don't want to retry or failover here
+        # No attempt was done, probably a syntax error.
+        # Hard configuration error, we don't want to retry or failover here.
         ocf_log( 'err',
             'pgsql_monitor(%d): unknown error while checking if instance "%s" is listening (returned %d)',
             $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE, $pgisready_rc );
@@ -1085,39 +1147,40 @@ sub pgsql_monitor {
 }
 
 
-# Demote the PostgreSQL from production to standby
+# Demote the PostgreSQL instance from primary to secondary
 # To demote a PostgreSQL instance, we must:
 #   * stop it gracefully
 #   * create recovery.conf with standby_mode = on
 #   * start it
+#
 sub pgsql_demote {
     my $rc;
 
-    # we need high monitor accuracy
+    # We need high monitor accuracy.
     $OCF_CHECK_LEVEL = 20;
 
     $rc = pgsql_monitor();
 
-    # Running as master. Normal, expected behavior.
+    # Running as primary. Normal, expected behavior.
     if ( $rc == OCF_RUNNING_MASTER ) {
         ocf_log( 'debug', 'pgsql_demote: "%s" currently running as a primary',
             $OCF_RESOURCE_INSTANCE )  ;
     }
     elsif ( $rc == OCF_SUCCESS ) {
-        # Alread running as slave. Nothing to do.
-        ocf_log( 'debug', 'pgsql_demote: "%s" currently running as a standby',
+        # Already running as secondary. Nothing to do.
+        ocf_log( 'debug', 'pgsql_demote: "%s" currently running as a secondary',
             $OCF_RESOURCE_INSTANCE );
             return OCF_SUCCESS;
     }
     elsif ( $rc == OCF_NOT_RUNNING ) {
-        # Alread running as slave. Nothing to do.
+        # Instance is stopped. Nothing to do.
         ocf_log( 'debug', 'pgsql_demote: "%s" currently shut down',
             $OCF_RESOURCE_INSTANCE );
     }
     elsif ( $rc == OCF_ERR_CONFIGURED ) {
-        # We actually prefer rising a hard or fatal error instead of leaving
+        # We actually prefer raising a hard or fatal error instead of leaving
         # the CRM abording its transition for a new one because of a soft error.
-        # The hard error will force the CRM to move the resource immediately
+        # The hard error will force the CRM to move the resource immediately.
         return OCF_ERR_CONFIGURED;
     }
     else {
@@ -1127,7 +1190,7 @@ sub pgsql_demote {
     # TODO we need to make sure at least one slave is connected!!
 
     # WARNING if the resource state is stopped instead of master, the ocf ra dev
-    # rsc advise to returns OCF_ERR_GENERIC, misleading the CRM in a loop where
+    # rsc advises to return OCF_ERR_GENERIC, misleading the CRM in a loop where
     # it computes transitions of demote(failing)->stop->start->promote actions
     # until failcount == migration-threshold.
     # This is a really ugly trick to keep going with the demode action if the
@@ -1140,20 +1203,21 @@ sub pgsql_demote {
         # commands might force-stop the PostgreSQL instance using immediate
         # after some timeout and return success, which is misleading.
 
-        # We set a 10 minute timeout to pg_ctl so we'll hit the pacemaker
-        # timeout stop command first
+        # We set a 10 minutes timeout to pg_ctl so we'll hit the pacemaker
+        # timeout stop command first.
         # TODO how to find the resource action timeout ?
         $rc = _runas( $PGCTL, '--pgdata', $pgdata, '--mode', 'fast', '-w',
             '--timeout', 600 , 'stop' );
 
-        # no need to wait for stop to complete, this is handled in pg_ctl using -w
+        # No need to wait for stop to complete, this is handled in pg_ctl
+        # using -w option.
         unless ( $rc == 0 ) {
             ocf_log( 'err', 'pgsql_demote: failed to stop "%s" using pg_ctl (returned %d)',
                 $OCF_RESOURCE_INSTANCE, $rc );
             return OCF_ERR_GENERIC;
         }
 
-        # Double check that the instance is stopped correctly
+        # Double check that the instance is stopped correctly.
         $rc = pgsql_monitor();
         unless ( $rc == OCF_NOT_RUNNING ) {
             ocf_log( 'err',
@@ -1164,21 +1228,21 @@ sub pgsql_demote {
     }
 
     #
-    # At this point, the instance **MUST** be stopped gracefully
+    # At this point, the instance **MUST** be stopped gracefully.
     #
 
-    # Note: We do not need to handle the recovery.conf file here as pg_start()
+    # Note: We do not need to handle the recovery.conf file here as pgsql_start
     # deal with that itself. Equally, no need to wait for the start to complete
-    # here, handled in pg_start().
+    # here, handled in pgsql_start.
     $rc = pgsql_start();
     if ( $rc == OCF_SUCCESS ) {
-        ocf_log( 'info', 'pgsql_demote: "%s" started as a standby',
+        ocf_log( 'info', 'pgsql_demote: "%s" started as a secondary',
             $OCF_RESOURCE_INSTANCE );
         return OCF_SUCCESS;
     }
 
-    # NOTE: no need to double check the instance state as pg_start already use
-    # pg_monitor to check the state before returning
+    # NOTE: No need to double check the instance state as pgsql_start already use
+    # pgsql_monitor to check the state before returning.
 
     ocf_log( 'err',
         'pgsql_demote: starting "%s" as a standby failed (returned %d)',
@@ -1187,7 +1251,7 @@ sub pgsql_demote {
 }
 
 
-# Promote the standby instance to production
+# Promote the secondary instance to primary
 #
 sub pgsql_promote {
     my $rc;
@@ -1200,12 +1264,12 @@ sub pgsql_promote {
             $OCF_RESOURCE_INSTANCE );
     }
     elsif ( $rc == OCF_RUNNING_MASTER ) {
-        # Already a master. Unexpected, but no problem.
+        # Already a master. Unexpected, but not a problem.
         ocf_log( 'info', 'pgsql_promote: "%s" already running as a primary',
             $OCF_RESOURCE_INSTANCE );
         return OCF_SUCCESS;
     }
-    elsif ( $rc == OCF_NOT_RUNNING ) { # INFO this is supposed not to happen
+    elsif ( $rc == OCF_NOT_RUNNING ) { # INFO this is not supposed to happen.
         # Currently not running. Need to start before promoting.
         ocf_log( 'info', 'pgsql_promote: "%s" currently not running, starting it',
             $OCF_RESOURCE_INSTANCE );
@@ -1224,49 +1288,65 @@ sub pgsql_promote {
     }
 
     #
-    # At this point, the instance **MUST** be started as a slave
+    # At this point, the instance **MUST** be started as a secondary.
     #
 
-    # The slave to be promoted should have been picked by pacemaker based on
-    # its master score set by the old master during its last monitor. See
-    # pgsql_monitor/_check_lsn_diff subs.
-    # To avoid any race condition between the last monitor action on the master
-    # and the **real** most up-to-date slave, we recheck the diff between the
-    # last primary known lsn and each slave position to pick the best one.
-    # The best slave to promote have the biggest delta between its LSN and the
-    # primary last known LSN.
-    #
-    # If primary_node resource attribute has not been set, the cluster is
-    # starting up, no need to compare slaves.
+    # If "primary_node" resource attribute has not been set, the cluster is
+    # starting up, no need to compare secondaries.
     #
     # If the "primary_node" parameter is the current node being promoted, this
-    # is a recover action trying to get back the old master. Do not compare with
-    # slaves.
+    # is a recover action trying to get back the old master. In this case, we
+    # do not want to compare its LSN with the other secondary instances.
     unless ( $OCF_PRIMARY_NODE eq '' or $OCF_PRIMARY_NODE eq $nodename ) {
+
+        # The promotion is occurring on the best known candidate (highest
+        # master score), as chosen by pacemaker during the last working monitor
+        # on previous master (see pgsql_monitor/_check_lsn_diff subs).
+        # To avoid any race condition between the last monitor action on the
+        # previous master and the **real** most up-to-date secondary, we
+        # measured the diff between the last primary known LSN and each
+        # secondary position during the "pre-promote" action, and stored it
+        # using the "lsn_diff" resource attribute.
+        #
+        # The best secondary to promote would have the biggest delta between
+        # its LSN and the primary last known LSN.
+        # If the current resource is not the best one, we need to modify the
+        # master scores accordingly, and abort the current promotion.
+        ocf_log( 'debug',
+            'pgsql_promote: checking if current node is the best candidate for promotion');
+
+        # Exclude nodes that are known to be unavailable (not in the current
+        # partition) using the "crm_node" command
         my @partition_nodes = split /\s/ => qx{ $CRM_NODE --partition };
         my $node_to_promote = '';
         my $max_lsndiff;
         my $node_lsndiff;
 
-        # The promotion occurring on the best known candidate by pacemaker
-        # since last working monitor on old master, this is supposed to be the
-        # max LSN diff
+        # Get the "lsn_diff" attribute value for the current node, as set
+        # during the "pre-promote" action.
+        # It should be the greatest among the secondary instances.
         $max_lsndiff = qx{ $CRM_ATTRIBUTE -q --node $nodename \\
             --quiet --query --name lsn_diff };
         chomp $max_lsndiff;
 
         if ( $? != 0 ) {
+            # This should not happen as the "lsn_diff" attribute should have
+            # been updated during the "pre-promote" action.
             ocf_log( 'crit',
-                'pgsql_promote: can not get my last lsn diff with primary');
+                'pgsql_promote: can not get current node last LSN diff with primary');
             return OCF_ERR_GENERIC;
         }
-    
-        # TODO instead of crm_node, use a resource attribute set during
-        #   notify using $OCF_RESKEY_CRM_meta_notify_slave_uname and 
-        #   $OCF_RESKEY_CRM_meta_notify_start_uname ?
+
+        ocf_log( 'debug',
+            'pgsql_promote: current node lsn diff: %s', $max_lsndiff);
+
+        # Now we compare with the other available nodes.
         foreach my $node ( @partition_nodes ) {
+            # We exclude the current node from the check.
             next if $node eq $nodename;
 
+            # Get the "lsn_diff" attribute value for the node, as set during
+            # the "pre-promote" action.
             $node_lsndiff = qx{ $CRM_ATTRIBUTE -q --node "$node" \\
                 --query --name lsn_diff };
             chomp $node_lsndiff;
@@ -1275,41 +1355,40 @@ sub pgsql_promote {
                 'pgsql_promote: comparing with "%s": lsn diff is %s',
                 $node, $node_lsndiff);
 
-            # If the current node have a bigger delta, select it as a best
-            # node to promote
+            # If the node has a bigger delta, select it as a best candidate to
+            # promotion.
             if ( $node_lsndiff ne '' and $node_lsndiff gt $max_lsndiff ) {
                 $node_to_promote = $node;
                 $max_lsndiff     = $node_lsndiff;
                 ocf_log( 'debug',
-                    'pgsql_promote: found %s as a better candidate to promote',
+                    'pgsql_promote: found "%s" as a better candidate to promote',
                     $node);
             }
         }
 
         # If any node has been selected, we adapt the master scores accordingly
-        # and break the current promotion
+        # and break the current promotion.
         if ( $node_to_promote ne '' ) {
             ocf_log( 'info',
                 'pgsql_promote: %s is the better candidate to promotion, aborting current promotion',
                 $node_to_promote );
 
-            # reset current node master score
+            # Reset current node master score.
             qx{ $CRM_MASTER --update 1 };
 
-            # set promotion candidate master score
+            # Set promotion candidate master score.
             qx{ $CRM_MASTER --node "$node_to_promote" --update 1000 };
 
             # We fail the promotion to trigger another promotion transition
-            # with the new scores
-            # TODO is there any other way at this point to trigger this
-            # without failing the promote action ?
+            # with the new scores.
             return OCF_ERR_GENERIC;
         }
 
-        # Else, we will keep on promoting the current node
+        # Else, we will keep on promoting the current node.
     }
 
     unless (
+        # Promote the instance on the current node.
         _runas( $PGCTL, '-D', $pgdata, '-w', 'promote' ) == 0 )
     {
         ocf_log( 'err', 'pgsql_promote: error during promotion' );
@@ -1325,20 +1404,25 @@ sub pgsql_promote {
     }
 
     ocf_log( 'debug',
-        'pgsql_promote: promote completed according to the controldata' );
+        'pgsql_promote: promote completed according to the monitor return code' );
 
-    # Safe tests
-    # force a complete check
+    # Safe tests.
+    # Force a complete check.
+    # FIXME is this usefull ? at this point, we always do a complete check on
+    # a primary instance anyway, so the previous monitor should be enough
     $OCF_CHECK_LEVEL = 10;
     $rc = pgsql_monitor();
 
+    # FIXME why search for a recovery.conf file at this point ?
+    #   should this test be added to the monitor ?
     if ( $rc == OCF_RUNNING_MASTER and not -f "$pgdata/recovery.conf" ) {
         ocf_log( 'info', 'pgsql_promote: promote complete' );
-        # Set primary_node parameter
+
+        # Set the "primary_node" resource parameter to the promoted node name.
         qx{ $CRM_RESOURCE --resource $OCF_RESOURCE_INSTANCE \\
             --set-parameter primary_node --parameter-value "$nodename" };
-        
-        # Set master score to 1001 for this node so it sticks to this role
+
+        # Set master score to 1001 for this node so it sticks to this role.
         qx { $CRM_MASTER --update 1001 };
 
         return OCF_SUCCESS;
@@ -1348,7 +1432,9 @@ sub pgsql_promote {
     return OCF_ERR_GENERIC;
 }
 
-# Called on pre and post actions.
+# Notify type actions, called on all available nodes before (pre) and after
+# (post) other actions, like promote, start, ...
+#
 sub pgsql_notify {
     ocf_log( 'debug', "pgsql_notify: Received $OCF_notify_type_op notification");
     ocf_log( 'debug', "pgsql_notify: active_resource: $OCF_notify_active_rsc");
@@ -1368,21 +1454,27 @@ sub pgsql_notify {
     ocf_log( 'debug', "pgsql_notify: master_uname: $OCF_notify_master_uname");
     ocf_log( 'debug', "pgsql_notify: slave_uname: $OCF_notify_slave_uname");
 
+    # This action is called when a failing master has been considered
+    # unreclaimable, which triggers a promotion.
+    # As every "notify" action, it is executed simultaneously on all available
+    # nodes.
     if ( $OCF_notify_type_op eq 'pre-promote' ) {
 
         ocf_log( 'info',
             'pgsql_notify: promoting instance on node "%s"',
             $OCF_notify_promote_uname );
 
-        # Compute lsn difference with last known primary position.
-        # On promote action, pgsql_promote check if the instance to be promoted
-        # is the best one based on this diff.
+        # Compute the difference with the last known primary LSN.
+        # During the following promote action, pgsql_promote will use this
+        # information to check if the instance to be promoted is the best one,
+        # so we can avoid a race condition between the last successful monitor
+        # on the previous master and the current promotion.
         #
-        # As we compare the last known master LSN with current position, the
-        # more bigger is the delta, the best candidate is the slave.
+        # As we compare the last known primary LSN with the current LSN, the
+        # bigger the delta, the best candidate is the slave.
 
-        # If this is the first promotion, last_primary_lsn will not be set in
-        # that case, there is no point to try computing this diff
+        # If this is the first promotion, "last_primary_lsn" will not be set,
+        # thus there is no point to try computing this diff.
         if ( $last_primary_lsn ne '' ) {
             my $query = qq{
                 SELECT pg_xlog_location_diff(
@@ -1393,45 +1485,55 @@ sub pgsql_notify {
 
             unless ( ref( $lsn_diff ) eq 'ARRAY' ) {
                 ocf_log( 'warning',
-                    'pgsql_notify: could not query the current node lsn diff with primary last known lsn' );
+                    'pgsql_notify: could not query the current node LSN diff with primary last known LSN' );
+                # FIXME we should specify the return code at this point, OCF_SUCCESS ?
                 return;
             }
 
+            # Extract the LSN diff value from the query result.
             $lsn_diff = $lsn_diff->[0][0];
 
             ocf_log( 'info',
-                'pgsql_notify: current node lsn diff with primary last known lsn: %s',
+                'pgsql_notify: current node LSN diff with primary last known LSN: %s',
                 $lsn_diff );
 
+            # Set the "lsn_diff" attribute value for this node so we can use it
+            # during the following "promote" action.
             qx{ $CRM_ATTRIBUTE --node "$nodename" \\
                 --name lsn_diff --update "$lsn_diff" };
 
             ocf_log( 'warning',
-                'pgsql_notify: could not set the current node lsn diff with primary last known lsn' )
+                'pgsql_notify: could not set the current node LSN diff with primary last known LSN' )
                 if $? != 0 ;
         }
     }
 
+    # This action is called after a promote action succeeded.
     elsif ( $OCF_notify_type_op eq 'post-promote' ) {
         ocf_log( 'info',
             'pgsql_notify: instance on node "%s" has been promoted',
             $OCF_notify_promote_uname );
-        # We have a new master (or old one recovered). Delete lsn_diff values
-        # on all nodes, the new masteers will set them back during its next
-        # monitor
+        # We have a new master (or the previous one recovered).
+        # Delete "lsn_diff" values on all nodes, the new master will set them
+        # back during its next monitor
+        # FIXME why would the master set the lsn_diff during its monitor ?
         qx{ $CRM_ATTRIBUTE --node "$nodename" --name lsn_diff --delete };
     }
 
     return OCF_SUCCESS;
 }
 
+# Action used to allow for online modification of resource parameters value.
+#
 sub pgsql_reload {
-    # no action necessary, this action is just to inform pacemaker that
-    # modification of non-unique parameters can be applied without
-    # restarting the resource
+
+    # No action necessary, the action declaration is enough to inform pacemaker
+    # that the modification of any non-unique parameter can be applied without
+    # having to restart the resource.
     ocf_log( 'info', 'pgsql_reload: instance "%s" reloaded',
         $OCF_RESOURCE_INSTANCE );
     return OCF_SUCCESS;
+
 }
 
 ############################################################
@@ -1440,13 +1542,15 @@ sub pgsql_reload {
 # Avoid "could not change directory" when executing commands as "system-user".
 chdir File::Spec->tmpdir();
 
+# Send log messages to local4 syslog facility.
 openlog('pgsqlms', 'pid', LOG_LOCAL4);
 
+# Set current node name.
 $nodename = ocf_local_nodename();
 
 if ( $OCF_ACTION =~ /^(?:start|stop|reload|monitor|promote|demote|notify)$/ ) {
     pgsql_validate_all();
-    # no need to validate for meta-data, methods or validate-all
+    # No need to validate for meta-data, methods or validate-all.
 }
 
 # Run action
