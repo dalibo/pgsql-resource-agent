@@ -1,0 +1,19 @@
+Testing the user agent
+=======================
+
+1/ you need to install the resource-agents package of your distribution. This
+   package contains the "ocft" script needed to run these tests.
+
+2/ if needed, export the following environment variables:
+
+     PGDATA        (default is /tmp/pgdata1)
+     PGBIN         (default is /usr/pgsql-9.3/bin)
+     RESOURCE_NAME (default is pgsqld)
+
+3/ to build the test scripts, run the following command as root:
+
+     ocft make -d your-pgsql-resource-agent-root/t pgsqlms
+
+4/ to actually run the tests, run the following command as root:
+
+     ocft test pgsqlms
