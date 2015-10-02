@@ -488,14 +488,12 @@ sub _check_lsn_diff {
         $partition_nodes =~ s/(?:^|\s)$row->[0](?:\s|$)/ /g;
     }
 
-    $partition_nodes =~ s/\s$nodename\s/ /g;
     $partition_nodes =~ s/(?:^\s+)|(?:\s+$)//g;
 
     # If there are still nodes in "partition_nodes", it means there is no
     # corresponding line in "pg_stat_replication".
-    foreach my $node (split /\s/ => $partition_nodes) {
+    foreach my $node (split /\s+/ => $partition_nodes) {
         # Exclude the current node.
-        # FIXME should not be possible due to previous substitution
         next if $node eq $nodename;
 
         ocf_log( 'warning',
