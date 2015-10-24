@@ -1,7 +1,7 @@
 #: {PGBIN=/usr/lib/postgresql/9.3/bin}
 CONFIG
     Agent pgsqlms
-    AgentRoot /usr/lib/ocf/resource.d/pgsql
+    AgentRoot /usr/lib/ocf/resource.d/heartbeat
     HangTimeout 120
 
 VARIABLE
@@ -30,7 +30,8 @@ SETUP-AGENT
 
     cat <<-EOC > "$PGDATA"/recovery.conf.pcmk
 	standby_mode = 'on'
-	primary_conninfo = 'user=postgres host=master port=5432'
+	# Fake master conninfo!
+	primary_conninfo = 'user=postgres host=127.0.0.1 port=15432'
 	recovery_target_timeline = 'latest'
 	EOC
 

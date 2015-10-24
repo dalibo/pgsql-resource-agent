@@ -10,10 +10,20 @@ Testing the user agent
      PGBIN         (default is /usr/pgsql-9.3/bin)
      RESOURCE_NAME (default is pgsqld)
 
-3/ to build the test scripts, run the following command as root:
+3/ you might need to create the HA_RSCTMP folder. Usually: 
+"/var/run/resource-agents/"
 
-     ocft make -d your-pgsql-resource-agent-root/t pgsqlms
+4/ to build the test scripts, run the following command as root:
 
-4/ to actually run the tests, run the following command as root:
+     ocft make pgsqlms
+
+5/ to actually run the tests, run the following command as root:
 
      ocft test pgsqlms
+
+6/ to have some debug, run:
+
+     ocft test -v pgsqlms
+
+
+For more informations, see : ocft -h

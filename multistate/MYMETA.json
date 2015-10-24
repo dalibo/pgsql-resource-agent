@@ -1,0 +1,49 @@
+{
+   "abstract" : "PostgreSQL multistate OCF resource agent",
+   "author" : [
+      "Mael Rimbault <mael.rimbault@dalibo.com>",
+      "Jehan-Guillaume <jgdr@dalibo.com>"
+   ],
+   "dynamic_config" : 0,
+   "generated_by" : "Module::Build version 0.4214",
+   "license" : [
+      "bsd"
+   ],
+   "meta-spec" : {
+      "url" : "http://search.cpan.org/perldoc?CPAN::Meta::Spec",
+      "version" : "2"
+   },
+   "name" : "pgsql-resource-agent",
+   "prereqs" : {
+      "runtime" : {
+         "requires" : {
+            "perl" : "v5.8.0"
+         }
+      }
+   },
+   "provides" : {
+      "OCF_Functions" : {
+         "file" : "lib/OCF_Functions.pm",
+         "version" : "0.1"
+      },
+      "OCF_ReturnCodes" : {
+         "file" : "lib/OCF_ReturnCodes.pm",
+         "version" : "0.1"
+      }
+   },
+   "release_status" : "stable",
+   "resources" : {
+      "bugtracker" : {
+         "web" : "https://github.com/dalibo/pgsql-resource-agent/issues"
+      },
+      "homepage" : "https://github.com/dalibo/pgsql-resource-agent",
+      "license" : [
+         "http://opensource.org/licenses/BSD-3-Clause"
+      ],
+      "repository" : {
+         "url" : "https://github.com/dalibo/pgsql-resource-agent"
+      }
+   },
+   "version" : "0.1",
+   "x_serialization_backend" : "JSON::PP version 2.27203"
+}

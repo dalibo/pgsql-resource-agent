@@ -23,7 +23,7 @@ use Data::Dumper;
 use Sys::Syslog qw(:standard :macros);
 
 use FindBin;
-use lib "$FindBin::RealBin";
+use lib "$FindBin::RealBin/../../lib/heartbeat/";
 
 use OCF_ReturnCodes;
 use OCF_Directories;

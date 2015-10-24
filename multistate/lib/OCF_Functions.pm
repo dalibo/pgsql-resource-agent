@@ -4,11 +4,67 @@
 #
 # Copyright (C) 2015: Jehan-Guillaume de Rorthais and Mael Rimbault
 
-=head1 OCF_Functions
+=head1 NAME
 
 OCF_Functions - helper subroutines for OCF agent
 
-This has been ported from the ocf-shellfuncs shell script.
+=head1 SYNOPSIS
+
+  use FindBin;
+  use lib "$FindBin::RealBin/../../lib/heartbeat/";
+  
+  use OCF_Functions;
+
+=head1 DESCRIPTION
+
+This module has been ported from the ocf-shellfuncs shell script of the
+resource-agents project. See L<https://github.com/ClusterLabs/resource-agents/>.
+
+=head1 VARIABLE
+
+The only variable exported by this module is C<__OCF_ACTION>.
+
+=head1 SUBROUTINES
+
+Here are the subroutines ported from ocf-shellfuncs and exported by this module:
+
+=over
+
+=item ha_debug
+
+=item ha_log
+
+=item hadate
+
+=item ocf_is_clone
+
+=item ocf_is_ms
+
+=item ocf_is_probe
+
+=item ocf_is_root
+
+=item ocf_is_true
+
+=item ocf_is_ver
+
+=item ocf_local_nodename
+
+=item ocf_log
+
+=item ocf_maybe_random
+
+=item ocf_ver2num
+
+=item ocf_ver_complete_level
+
+=item ocf_ver_level
+
+=item ocf_version_cmp
+
+=item set_logtag
+
+=back
 
 =cut
 
@@ -21,7 +77,7 @@ use POSIX qw( strftime setlocale LC_ALL );
 use English;
 
 use FindBin;
-use lib "$FindBin::RealBin";
+use lib "$FindBin::RealBin/../../lib/heartbeat/";
 
 use OCF_ReturnCodes;
 use OCF_Directories;
@@ -35,7 +91,6 @@ BEGIN {
         $__OCF_ACTION
         ocf_is_root
         ocf_maybe_random
-        ocf_is_decimal
         ocf_is_true
         hadate
         set_logtag
@@ -398,6 +453,8 @@ undef $ENV{'OCF_FUNCTIONS_DIR'}
     if defined $ENV{'OCF_FUNCTIONS_DIR'}
     and $ENV{'OCF_FUNCTIONS_DIR'} eq "$ENV{'OCF_ROOT'}/resource.d/heartbeat";
 
+$ENV{'HA_debug'} = 0 unless defined $ENV{'HA_debug'};
+
 # Define OCF_RESKEY_CRM_meta_interval in case it isn't already set,
 # to make sure that ocf_is_probe() always works
 $ENV{'OCF_RESKEY_CRM_meta_interval'} = 0
@@ -443,3 +500,10 @@ unless ( defined $ENV{'OCF_RESOURCE_INSTANCE'}
 }
 
 1;
+
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright (C) 2015: Jehan-Guillaume de Rorthais and Mael Rimbault.
+
+Licensed under the PostgreSQL License.
