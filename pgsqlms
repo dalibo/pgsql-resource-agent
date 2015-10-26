@@ -154,6 +154,13 @@ sub _controldata_state {
 
     $status =~ /^Database cluster state:\s+(.*?)\s*$/m;
 
+    unless ( defined $1 ) {
+        ocf_log( 'crit', sprintf
+            '_controldata_state: could not read state from controldata file for "%s"',
+            $pgdata );
+        exit $OCF_ERR_CONFIGURED;
+    }
+
     return $1;
 }
 
