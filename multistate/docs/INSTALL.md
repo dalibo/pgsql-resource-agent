@@ -1,2 +1,46 @@
-Install
-===============
+How to install this resource agent
+==================================
+
+This agent is written in perl. Its installation process follow the perl common
+method, but its installation path follow usual path used for OCF libraries and
+scripts.
+
+Quick install
+-------------
+
+The quick installation process is:
+
+```
+./Build.PL
+./Build
+sudo ./Build install
+```
+
+This process is supposed to detect the root of your OCF files (aka. OCF_ROOT)
+and install the following files in there:
+
+  * $OCF_ROOT/lib/heartbeat/OCF_ReturnCodes.pm
+  * $OCF_ROOT/lib/heartbeat/OCF_Functions.pm
+  * $OCF_ROOT/lib/heartbeat/OCF_Directories.pm
+  * $OCF_ROOT/resource.d/heartbeat/pgsqlms
+
+Moreover, if the build process find an ocft config folder (usually
+``/usr/share/resource-agents/ocft/configs/``), it will install the "pgsqlms"
+config file in there.
+
+
+Build.PL arguments
+------------------
+
+The first Build step (call of Build.PL) accept two arguments:
+
+  * ``--with_ocf_root=PATH``: give the location of OCF_ROOT to the Build process
+  * ``--with_ocft_confs=PATH``: give the location of the ocft config files
+
+They are usually not required as Build.PL should detect their location by
+itself.
+
+Testing
+-------
+
+See t/README to learn more about ocft tests.
