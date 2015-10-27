@@ -10,9 +10,11 @@ Quick install
 
 The quick installation process is:
 
-  ./Build.PL
-  ./Build
-  sudo ./Build install
+```
+./Build.PL
+./Build
+sudo ./Build install
+```
 
 This process is supposed to detect the root of your OCF files (aka. OCF_ROOT)
 and install the following files in there:
