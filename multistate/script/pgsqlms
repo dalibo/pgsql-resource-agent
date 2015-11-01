@@ -306,16 +306,22 @@ sub _controldata {
 #
 sub _query {
     my $query        = shift;
+    my $res          = shift;
     my $connstr      = "dbname=postgres user=postgres";
-    my @ans          = ();
     my $RS           = chr(30); # ASCII RS  (record separator)
     my $FS           = chr(3);  # ASCII ETX (end of text)
     my $postgres_uid = getpwnam( $system_user );
     my $oldeuid      = $>;
     my $tmpfile;
+    my @res;
     my $ans;
     my $pid;
     my $rc;
+
+    unless ( defined $res and defined $query and $query ne '' ) {
+        ocf_log( 'debug',  sprintf'_query: wrong parameters!' );
+        return -1;
+    }
 
     unless ( $tmpfile = File::Temp->new(
             TEMPLATE => 'pgsqlms-XXXXXXXX',
@@ -326,7 +332,7 @@ sub _query {
         exit $OCF_ERR_INSTALLED;
     }
 
-    print $tmpfile "$query";
+    print $tmpfile $query;
     chmod 0644, $tmpfile;
 
     # Change the effective user to the given system_user so after forking
@@ -357,19 +363,19 @@ sub _query {
     if ( defined $ans ) {
         chop $ans;
 
-        push @ans, [ split(chr(3) => $_, -1) ]
+        push @{ $res }, [ split(chr(3) => $_, -1) ]
             foreach split (chr(30) => $ans, -1);
 
-        ocf_log( 'debug', '_query: @ans:'. Dumper(\@ans));
+        ocf_log( 'debug', '_query: @res:'. Dumper(\@res));
     }
 
-    return $rc if $rc != 0;
-
-    # Possible error codes:
+    # Possible return codes:
+    #  -1: wrong parameters
+    #   0: OK
     #   1: failed to get resources (memory, missing file, ...)
     #   2: unable to connect
     #   3: query failed
-    return \@ans ;
+    return $rc;
 }
 
 
@@ -384,7 +390,8 @@ sub _query {
 sub _check_lsn_diff {
     my $row_num;
     my $query;
-    my $rs;
+    my @rs;
+    my $rc;
 
     # Call crm_node to exclude nodes that are not part of the cluster at this
     # point.
@@ -419,29 +426,29 @@ sub _check_lsn_diff {
         ) AS s
     };
 
-    $rs = _query( $query );
+    $rc = _query( $query, \@rs );
 
-    if ( ref( $rs ) eq 'SCALAR' ) {
+    if ( $rc != 0 ) {
         ocf_log( 'err', sprintf
             '_check_lsn_diff: query to get LSN diffs failed (%d)',
-            $rs );
+            $rc );
         exit $OCF_ERR_GENERIC;
     }
 
     # We update the cluster resource "last_primary_lsn" using the current
     # primary LSN position we get in the first line from the query resultset.
     qx{ $CRM_RESOURCE --resource "$OCF_RESOURCE_INSTANCE" \\
-        --set-parameter last_primary_lsn --parameter-value "$rs->[0][3]" };
+        --set-parameter last_primary_lsn --parameter-value "$rs[0][3]" };
     if ( $? != 0 ) {
         ocf_log( 'crit',  sprintf
             '_check_lsn_diff: Can not set last_primary_lsn (%s)',
-            $rs->[0][3] );
+            $rs[0][3] );
         exit $OCF_ERR_GENERIC;
     }
 
-    shift @{ $rs };
+    shift @rs;
 
-    $row_num = scalar @{ $rs };
+    $row_num = scalar @rs;
 
     # If there is no row left at this point, it means that there is no
     # secondary instance connected.
@@ -452,7 +459,7 @@ sub _check_lsn_diff {
     # For each secondary connected, set their master score based on the
     # row_number: the highest row_number is the best candidate to promotion.
     # FIXME avoid updating scores if there was no change with previous scores ?
-    while ( my $row = shift @{ $rs } ) {
+    while ( my $row = shift @rs ) {
 
         my $node_score = qx{ $CRM_MASTER --node "$row->[0]" --quiet -G };
         chomp $node_score;
@@ -520,16 +527,18 @@ sub _confirm_role {
     my $controldata_rc;
 
     if ( $OCF_CHECK_LEVEL >= 10 ) {
+        my $is_in_recovery;
+        my $rc;
+        my @rs;
         # Hard check, call psql and pg_is_in_recovery(), and check LSN diff
 
-        my $is_in_recovery = _query( "SELECT pg_is_in_recovery()" );
-        $query_rc = ( ref( $is_in_recovery ) eq 'ARRAY' ? 0 : $is_in_recovery);
+        $rc = _query( "SELECT pg_is_in_recovery()", \@rs );
 
-        $is_in_recovery = $is_in_recovery->[0][0];
+        $is_in_recovery = $rs[0][0];
 
-        ocf_log( 'debug', "_confirm_role($OCF_CHECK_LEVEL): hard checking $is_in_recovery $query_rc");
+        ocf_log( 'debug', "_confirm_role($OCF_CHECK_LEVEL): hard checking $is_in_recovery $rc");
 
-        if ( $query_rc == 0 ) {
+        if ( $rc == 0 ) {
             # The query was executed, check the result.
             if ( $is_in_recovery eq 't' ) {
                 # The instance is a secondary.
@@ -549,7 +558,7 @@ sub _confirm_role {
                 $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE, $is_in_recovery );
             return $OCF_ERR_CONFIGURED;
         }
-        elsif ( $query_rc == 1 or $query_rc == 2 ) {
+        elsif ( $rc == 1 or $rc == 2 ) {
             # psql cound not connect to the instance.
             # As pg_isready reported the instance was listening, this error
             # could be a max_connection saturation. Just report a soft error.
@@ -558,7 +567,7 @@ sub _confirm_role {
                 $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
             return $OCF_ERR_GENERIC;
         }
-        elsif ( $query_rc == 3 ) {
+        elsif ( $rc == 3 ) {
             # The query failed.
             # This should not happen, raise a hard configuration error.
             ocf_log( 'err', sprintf
@@ -1448,14 +1457,18 @@ sub pgsql_notify {
         # If this is the first promotion, "last_primary_lsn" will not be set,
         # thus there is no point to try computing this diff.
         if ( $last_primary_lsn ne '' ) {
+            my @rs;
+            my $rc;
+            my $lsn_diff;
             my $query = qq{
                 SELECT pg_xlog_location_diff(
                     pg_last_xlog_receive_location(), '$last_primary_lsn'
                 )
             };
-            my $lsn_diff = _query( $query );
 
-            unless ( ref( $lsn_diff ) eq 'ARRAY' ) {
+            $rc = _query( $query, \@rs );
+
+            unless ( $rc == 0 ) {
                 ocf_log( 'warning',
                     'pgsql_notify: could not query the current node LSN diff with primary last known LSN' );
                 # FIXME we should specify the return code at this point, OCF_SUCCESS ?
@@ -1463,7 +1476,7 @@ sub pgsql_notify {
             }
 
             # Extract the LSN diff value from the query result.
-            $lsn_diff = $lsn_diff->[0][0];
+            $lsn_diff = $rs[0][0];
 
             ocf_log( 'info', sprintf
                 'pgsql_notify: current node LSN diff with primary last known LSN: %s',
