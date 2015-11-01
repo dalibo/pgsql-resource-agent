@@ -36,7 +36,6 @@ our $PROGRAM = 'pgsqlms';
 my $OCF_RESOURCE_INSTANCE = $ENV{'OCF_RESOURCE_INSTANCE'};
 my $OCF_ACTION            = $ARGV[0];
 my $OCF_PRIMARY_NODE      = $ENV{'OCF_RESKEY_primary_node'};
-my $OCF_CHECK_LEVEL       = 30; #$ENV{'OCF_CHECK_LEVEL'};
 
 my $OCF_notify_type           = $ENV{'OCF_RESKEY_CRM_meta_notify_type'}              || '';
 my $OCF_notify_operation      = $ENV{'OCF_RESKEY_CRM_meta_notify_operation'}         || '';
@@ -523,90 +522,55 @@ sub _check_lsn_diff {
 # check if the instance is primary or secondary.
 #
 sub _confirm_role {
-    my $query_rc;
-    my $controldata_rc;
+    my $is_in_recovery;
+    my $rc;
+    my @rs;
 
-    if ( $OCF_CHECK_LEVEL >= 10 ) {
-        my $is_in_recovery;
-        my $rc;
-        my @rs;
-        # Hard check, call psql and pg_is_in_recovery(), and check LSN diff
+    $rc = _query( "SELECT pg_is_in_recovery()", \@rs );
 
-        $rc = _query( "SELECT pg_is_in_recovery()", \@rs );
+    $is_in_recovery = $rs[0][0];
 
-        $is_in_recovery = $rs[0][0];
+    ocf_log( 'debug', "_confirm_role: hard checking $is_in_recovery $rc");
 
-        ocf_log( 'debug', "_confirm_role($OCF_CHECK_LEVEL): hard checking $is_in_recovery $rc");
-
-        if ( $rc == 0 ) {
-            # The query was executed, check the result.
-            if ( $is_in_recovery eq 't' ) {
-                # The instance is a secondary.
-                ocf_log( 'debug', "_confirm_role($OCF_CHECK_LEVEL): instance $OCF_RESOURCE_INSTANCE is a secondary");
-                return $OCF_SUCCESS;
-            }
-            elsif ( $is_in_recovery eq 'f' ) {
-                # The instance is a primary.
-                ocf_log( 'debug', "_confirm_role($OCF_CHECK_LEVEL): instance $OCF_RESOURCE_INSTANCE is a primary");
-                # Check lsn diff with current slaves if any
-                _check_lsn_diff();
-                return $OCF_RUNNING_MASTER;
-            }
-            # This should not happen, raise a hard configuration error.
-            ocf_log( 'err',  sprintf
-                '_confirm_role(%d): unexpected result from query to check if "%s" is a primary or a secondary: "%s"',
-                $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE, $is_in_recovery );
-            return $OCF_ERR_CONFIGURED;
+    if ( $rc == 0 ) {
+        # The query was executed, check the result.
+        if ( $is_in_recovery eq 't' ) {
+            # The instance is a secondary.
+            ocf_log( 'debug', "_confirm_role: instance $OCF_RESOURCE_INSTANCE is a secondary");
+            return $OCF_SUCCESS;
         }
-        elsif ( $rc == 1 or $rc == 2 ) {
-            # psql cound not connect to the instance.
-            # As pg_isready reported the instance was listening, this error
-            # could be a max_connection saturation. Just report a soft error.
-            ocf_log( 'err',  sprintf
-                '_confirm_role(%s): psql could not connect to instance "%s"',
-                $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
-            return $OCF_ERR_GENERIC;
+        elsif ( $is_in_recovery eq 'f' ) {
+            # The instance is a primary.
+            ocf_log( 'debug', "_confirm_role: instance $OCF_RESOURCE_INSTANCE is a primary");
+            # Check lsn diff with current slaves if any
+            _check_lsn_diff();
+            return $OCF_RUNNING_MASTER;
         }
-        elsif ( $rc == 3 ) {
-            # The query failed.
-            # This should not happen, raise a hard configuration error.
-            ocf_log( 'err', sprintf
-                '_confirm_role(%s): the query to check if instance "%s"is a primary or a secondary failed',
-                $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
-            return $OCF_ERR_CONFIGURED;
-        }
+
+        # This should not happen, raise a hard configuration error.
+        ocf_log( 'err',  sprintf
+            '_confirm_role: unexpected result from query to check if "%s" is a primary or a secondary: "%s"',
+            $OCF_RESOURCE_INSTANCE, $is_in_recovery );
+
+        return $OCF_ERR_CONFIGURED;
     }
-
-    # Soft check, call pg_controldata to check wether primary or secondary.
-    $controldata_rc = _controldata();
-    if ( $controldata_rc == $OCF_NOT_RUNNING ) {
-        # Something went wrong, the instance should not be listening if not
-        # running !
-        ocf_log( 'err', sprintf
-            '_confirm_role(%s): instance "%s" controldata shows that instance is not running, but the instance is listening',
-            $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
+    elsif ( $rc == 1 or $rc == 2 ) {
+        # psql cound not connect to the instance.
+        # As pg_isready reported the instance was listening, this error
+        # could be a max_connection saturation. Just report a soft error.
+        ocf_log( 'err',  sprintf
+            '_confirm_role: psql could not connect to instance "%s"',
+            $OCF_RESOURCE_INSTANCE );
         return $OCF_ERR_GENERIC;
     }
-    elsif ( $controldata_rc == $OCF_RUNNING_MASTER ) {
-        # The running instance is a primary.
-        ocf_log( 'debug', sprintf
-            '_confirm_role(%s): instance "%s" is a primary',
-            $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
-        return $OCF_RUNNING_MASTER;
-    }
-    elsif ( $controldata_rc == $OCF_SUCCESS ) {
-        # The running instance is a secondary.
-        ocf_log( 'debug', sprintf
-            '_confirm_role(%s): instance "%s" is a secondary',
-            $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
-        return $OCF_SUCCESS;
-    }
 
-    # We should not get here, something went wrong.
+    # The query failed (rc: 3) or bad parameters (rc: -1).
+    # This should not happen, raise a hard configuration error.
     ocf_log( 'err', sprintf
-        '_confirm_role(%s): could not get instance "%s" status from controldata (returned: %d)',
-        $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE, $controldata_rc );
-    return $controldata_rc;
+        '_confirm_role: the query to check if instance "%s"is a primary or a secondary failed (rc: %d)',
+        $OCF_RESOURCE_INSTANCE, $rc );
+
+    return $OCF_ERR_CONFIGURED;
 }
 
 
@@ -624,21 +588,21 @@ sub _confirm_stopped {
         # The PID file exists and the process is available.
         # That should not be the case, return an error.
         ocf_log( 'err', sprintf
-            '_confirm_stopped(%d): instance "%s" is not listening, but the process referenced in postmaster.pid exists',
-            $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
+            '_confirm_stopped: instance "%s" is not listening, but the process referenced in postmaster.pid exists',
+            $OCF_RESOURCE_INSTANCE );
         return $OCF_ERR_GENERIC;
     }
 
     # The PID file does not exist or the process is not available.
     ocf_log( 'debug', sprintf
-        '_confirm_stopped(%d): no postmaster process found for instance "%s"',
-        $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
+        '_confirm_stopped: no postmaster process found for instance "%s"',
+        $OCF_RESOURCE_INSTANCE );
 
     if ( -f "$pgdata/backup_label" ) {
         # We are probably on a freshly built secondary that was not started yet.
         ocf_log( 'debug', sprintf
-            '_confirm_stopped(%d): backup_label file exists: probably on a never started secondary',
-            $OCF_CHECK_LEVEL );
+            '_confirm_stopped: backup_label file exists: probably on a never started secondary',
+        );
         return $OCF_NOT_RUNNING;
     }
 
@@ -648,8 +612,8 @@ sub _confirm_stopped {
         # The controldata has not been updated to "shutdown".
         # It should mean we had a crash on a primary instance.
         ocf_log( 'err', sprintf
-            '_confirm_stopped(%d): instance "%s" controldata indicates a running primary instance, the instance has probably crashed',
-            $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
+            '_confirm_stopped: instance "%s" controldata indicates a running primary instance, the instance has probably crashed',
+            $OCF_RESOURCE_INSTANCE );
         return $OCF_FAILED_MASTER;
     }
     elsif ( $controldata_rc == $OCF_SUCCESS ) {
@@ -657,23 +621,23 @@ sub _confirm_stopped {
         # It should mean we had a crash on a secondary instance.
         # There is no "FAILED_SLAVE" return code, so we return a generic error.
         ocf_log( 'err', sprintf
-            '_confirm_stopped(%d): instance "%s" controldata indicates a running secondary instance, the instance has probably crashed',
-            $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
+            '_confirm_stopped: instance "%s" controldata indicates a running secondary instance, the instance has probably crashed',
+            $OCF_RESOURCE_INSTANCE );
         return $OCF_ERR_GENERIC;
     }
     elsif ( $controldata_rc == $OCF_NOT_RUNNING ) {
         # The controldata state is consistent, the instance was probably
         # propertly shut down.
         ocf_log( 'debug',  sprintf
-            '_confirm_stopped(%d): instance "%s" controldata indicates that the instance was propertly shut down',
-            $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
+            '_confirm_stopped: instance "%s" controldata indicates that the instance was propertly shut down',
+            $OCF_RESOURCE_INSTANCE );
         return $OCF_NOT_RUNNING;
     }
 
     # Something went wrong with the controldata check.
     ocf_log( 'err', sprintf
-        '_confirm_stopped(%d): could not get instance "%s" status from controldata (returned: %d)',
-        $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE, $controldata_rc );
+        '_confirm_stopped: could not get instance "%s" status from controldata (returned: %d)',
+        $OCF_RESOURCE_INSTANCE, $controldata_rc );
 
     return $OCF_ERR_GENERIC;
 }
@@ -867,8 +831,6 @@ sub pgsql_start {
     my $uid;
     my $gid;
 
-    #$OCF_CHECK_LEVEL = 20;
-
     $rc = pgsql_monitor();
     # Instance must be running as secondary or being stopped.
     # Anything else is an error.
@@ -946,8 +908,6 @@ sub pgsql_stop {
     my $state;
     my $pidfile = "$pgdata/postmaster.pid";
 
-    #$OCF_CHECK_LEVEL = 20;
-
     # Instance must be running as secondary or primary or being stopped.
     # Anything else is an error.
     $rc = pgsql_monitor();
@@ -999,22 +959,18 @@ sub pgsql_monitor {
     my $pgisready_rc;
     my $controldata_rc;
 
-    #$OCF_CHECK_LEVEL = 10;
-
-    ocf_log( 'debug', "pgsql_monitor($OCF_CHECK_LEVEL): monitor is a probe" ) if
-        ocf_is_probe();
+    ocf_log( 'debug', "pgsql_monitor: monitor is a probe" ) if ocf_is_probe();
 
     # First check, verify if the instance is listening.
     $pgisready_rc = _pg_isready();
 
     if ( $pgisready_rc == 0 ) {
         # The instance is listening.
-        # We confirm that the instance is up and get if it is a primary or a
-        # secondary using pg_controldata (OCF_CHECK_LEVEL < 10) or psql and
-        # pg_is_in_recovery() (OCF_CHECK_LEVEL >= 10).
+        # We confirm that the instance is up and return if it is a primary or a
+        # secondary
         ocf_log( 'debug',  sprintf
-            'pgsql_monitor(%d): instance "%s" is listening',
-            $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
+            'pgsql_monitor: instance "%s" is listening',
+            $OCF_RESOURCE_INSTANCE );
         return _confirm_role();
     }
 
@@ -1028,8 +984,8 @@ sub pgsql_monitor {
         # Except for the warm standby case, this should be a transitional state.
         # We try to confirm using pg_controldata.
         ocf_log( 'debug', sprintf
-            'pgsql_monitor(%d): instance "%s" rejects connections - checking again...',
-            $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
+            'pgsql_monitor: instance "%s" rejects connections - checking again...',
+            $OCF_RESOURCE_INSTANCE );
         $controldata_rc = _controldata();
 
         if ( $controldata_rc == $OCF_RUNNING_MASTER
@@ -1038,18 +994,16 @@ sub pgsql_monitor {
             # This state indicates that pg_isready check should succeed.
             # We check again.
             ocf_log( 'debug',  sprintf
-                'pgsql_monitor(%d): instance "%s" controldata shows a running status',
-                $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
+                'pgsql_monitor: instance "%s" controldata shows a running status',
+                $OCF_RESOURCE_INSTANCE );
 
             $pgisready_rc = _pg_isready();
             if ( $pgisready_rc == 0 ) {
                 # Consistent with pg_controdata output.
-                # We can check if the instance is primary or secondary using
-                # pg_controldata (OCF_CHECK_LEVEL < 10) or psql and
-                # pg_is_in_recovery() (OCF_CHECK_LEVEL >= 10).
+                # We can check if the instance is primary or secondary
                 ocf_log( 'debug',  sprintf
-                    'pgsql_monitor(%d): instance "%s" is listening',
-                    $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
+                    'pgsql_monitor: instance "%s" is listening',
+                    $OCF_RESOURCE_INSTANCE );
                 return _confirm_role();
             }
 
@@ -1057,8 +1011,11 @@ sub pgsql_monitor {
             # NOTE: if the instance is a warm standby, we end here.
             # TODO raise an hard error here ?
             ocf_log( 'err', sprintf
-                'pgsql_monitor(%d): instance "%s" controldata is not consistent with pg_isready (returned: %d)',
-                $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE, $pgisready_rc );
+                'pgsql_monitor: instance "%s" controldata is not consistent with pg_isready (returned: %d)',
+                $OCF_RESOURCE_INSTANCE, $pgisready_rc );
+            ocf_log( 'info', sprintf
+                'pgsql_monitor: if this instance is in warm standby, this resource agent only supports hot standby',
+                $OCF_RESOURCE_INSTANCE, $pgisready_rc );
 
             return $OCF_ERR_GENERIC;
         }
@@ -1072,23 +1029,23 @@ sub pgsql_monitor {
                 # We check the process status using pg_ctl status and check
                 # if it was propertly shut down using pg_controldata.
                 ocf_log( 'debug', sprintf
-                    'pgsql_monitor(%d): instance "%s" is not listening',
-                    $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
+                    'pgsql_monitor: instance "%s" is not listening',
+                    $OCF_RESOURCE_INSTANCE );
                 return _confirm_stopped();
             }
             # Still not consistent, raise an error.
             # TODO raise an hard error here ?
             ocf_log( 'err', sprintf
-                'pgsql_monitor(%d): instance "%s" controldata is not consistent with pg_isready (returned: %d)',
-                $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE, $pgisready_rc );
+                'pgsql_monitor: instance "%s" controldata is not consistent with pg_isready (returned: %d)',
+                $OCF_RESOURCE_INSTANCE, $pgisready_rc );
 
             return $OCF_ERR_GENERIC;
         }
 
         # Something went wrong with the controldata check, hard fail.
         ocf_log( 'err', sprintf
-            'pgsql_monitor(%d): could not get instance "%s" status from controldata (returned: %d)',
-            $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE, $controldata_rc );
+            'pgsql_monitor: could not get instance "%s" status from controldata (returned: %d)',
+            $OCF_RESOURCE_INSTANCE, $controldata_rc );
 
         return $OCF_ERR_INSTALLED;
     }
@@ -1098,8 +1055,8 @@ sub pgsql_monitor {
         # We check the process status using pg_ctl status and check
         # if it was propertly shut down using pg_controldata.
         ocf_log( 'debug',  sprintf
-            'pgsql_monitor(%d): instance "%s" is not listening',
-            $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
+            'pgsql_monitor: instance "%s" is not listening',
+            $OCF_RESOURCE_INSTANCE );
         return _confirm_stopped();
     }
 
@@ -1107,15 +1064,15 @@ sub pgsql_monitor {
         # No attempt was done, probably a syntax error.
         # Hard configuration error, we don't want to retry or failover here.
         ocf_log( 'err', sprintf
-            'pgsql_monitor(%d): unknown error while checking if instance "%s" is listening (returned %d)',
-            $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE, $pgisready_rc );
+            'pgsql_monitor: unknown error while checking if instance "%s" is listening (returned %d)',
+            $OCF_RESOURCE_INSTANCE, $pgisready_rc );
 
         return $OCF_ERR_CONFIGURED;
     }
 
     ocf_log( 'err', sprintf
-        'pgsql_monitor(%d): unexpected result when checking instance "%s" status',
-        $OCF_CHECK_LEVEL, $OCF_RESOURCE_INSTANCE );
+        'pgsql_monitor: unexpected result when checking instance "%s" status',
+        $OCF_RESOURCE_INSTANCE );
 
     return $OCF_ERR_GENERIC;
 }
@@ -1129,9 +1086,6 @@ sub pgsql_monitor {
 #
 sub pgsql_demote {
     my $rc;
-
-    # We need high monitor accuracy.
-    #$OCF_CHECK_LEVEL = 20;
 
     $rc = pgsql_monitor();
 
@@ -1387,11 +1341,6 @@ sub pgsql_promote {
     ocf_log( 'debug',
         'pgsql_promote: promote completed according to the monitor return code' );
 
-    # Safe tests.
-    # Force a complete check.
-    # FIXME is this usefull ? at this point, we always do a complete check on
-    # a primary instance anyway, so the previous monitor should be enough
-    #$OCF_CHECK_LEVEL = 10;
     $rc = pgsql_monitor();
 
     # FIXME why search for a recovery.conf file at this point ?
