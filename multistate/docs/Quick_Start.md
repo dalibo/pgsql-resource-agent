@@ -1,6 +1,6 @@
 # Quick Start
 
-This quick start guide is based on CentOS 6.6.
+This quick start guide is based on CentOS 6.6, using the ``pcs`` command.
 
 
 ## Network setup
@@ -269,7 +269,7 @@ pcs -f cluster1.xml constraint order demote pgsql-ha then stop pgsql-master-ip s
 And finally, we define a preference for our master node:
 
 ```
-pcs -f cluster1.xml constraint location pgsqld prefers srv1=1
+pcs -f cluster1.xml constraint location pgsql-ha prefers srv1=1
 ```
 
 We can now push our CIB to the cluster, which will start all the magic stuff:
