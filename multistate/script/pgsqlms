@@ -169,13 +169,9 @@ sub _controldata_state {
 #   primary_conninfo='...'
 #   recovery_target_timeline = 'latest'
 #
-# The "primary_conninfo" string must reference the virtual IP address set up
-# to be associated with the master PostgreSQL resource.
-#
 sub _create_recovery_conf {
     my $fh;
     my (undef, undef, $uid, $gid) = getpwnam($system_user);
-    my $primary_conninfo = '';
     my $recovery_conf    = '';
     my $recovery_file    = "$pgdata/recovery.conf";
 
@@ -198,32 +194,12 @@ sub _create_recovery_conf {
         exit $OCF_ERR_CONFIGURED;
     }
 
-    # Copy all parameters from the template file, except for the connection
-    # string, whose value is extracted so we can adapt it.
+    # Copy all parameters from the template file
     while (my $line = <$fh>) {
         chomp $line;
-        if ( $line =~ m/^\s*primary_conninfo\s*=\s*'([^']*)'/ ) {
-            $primary_conninfo = $1 if defined $1;
-            next;
-        }
         $recovery_conf .= "$line\n";
     }
     close $fh;
-
-    if ( $primary_conninfo eq '' ) {
-        ocf_log( 'crit',  sprintf
-            '_create_recovery_conf: no primary_conninfo in "%s"',
-            $recovery_conf );
-        exit $OCF_ERR_CONFIGURED;
-    }
-
-    # Remove any existing "application_name" configuration from the connection
-    # string.
-    $primary_conninfo =~ s/(?:application_name)=[^\s]+//g;
-
-    # Add "application_name" configuration with the current node's name to the
-    # connection string so it shows in the "pg_stat_replication" view.
-    $primary_conninfo .= " application_name=$nodename";
 
     ocf_log( 'debug',  sprintf
         '_create_recovery_conf: write the replication configuration to "%s" file',
@@ -236,9 +212,8 @@ sub _create_recovery_conf {
         exit $OCF_ERR_CONFIGURED;
     }
 
-    # Write the new recovery.conf file using configuration from the template
-    # file and the modified connection string for "primary_conninfo".
-    print $fh "$recovery_conf\nprimary_conninfo = '$primary_conninfo'";
+    # Write the recovery.conf file using configuration from the template file
+    print $fh $recovery_conf;
 
     close $fh;
 
@@ -765,6 +740,8 @@ sub pgsql_validate_all {
     my $fh;
     my $PGVERSION;
     my $PGVERNUM;
+    my @content;
+    my $nodename = ocf_local_nodename();
 
     # check binaries
     return $OCF_ERR_INSTALLED unless -x $PGCTL   and -x $PGPSQL
@@ -786,8 +763,38 @@ sub pgsql_validate_all {
 
     # check recovery template
     if ( ! -f $recovery_tpl ) {
-        ocf_log( 'crit',  sprintf'Recovery template "%s" does not exists',
+        ocf_log( 'crit',  sprintf'Recovery template file "%s" does not exists',
             $recovery_tpl );
+        exit $OCF_ERR_CONFIGURED;
+    }
+
+    # check content of the recovery template file
+    unless ( open( $fh, '<', $recovery_tpl ) ) {
+        ocf_log( 'crit',  sprintf'Could not open file "%s"',
+            $recovery_tpl );
+        exit $OCF_ERR_CONFIGURED;
+    }
+    @content = <$fh>;
+    close $fh;
+
+    unless ( grep /^\s*standby_mode\s*=\s*'?on'?\s*$/, @content ) {
+        ocf_log( 'crit',  sprintf
+            'Recovery template file must contain "standby_mode = on"'
+        );
+        exit $OCF_ERR_CONFIGURED;
+    }
+
+    unless ( grep /^\s*recovery_target_timeline\s*=\s*'?latest'?\s*$/, @content ) {
+        ocf_log( 'crit',  sprintf
+            "Recovery template file must contain \"recovery_target_timeline = 'latest'\""
+        );
+        exit $OCF_ERR_CONFIGURED;
+    }
+
+    unless ( grep /^\s*primary_conninfo\s*=.*application_name=$nodename/, @content ) {
+        ocf_log( 'crit',  sprintf
+            "Recovery template file must contain in primary_conninfo parameter \"application_name=%s\"",
+            $nodename );
         exit $OCF_ERR_CONFIGURED;
     }
 
@@ -819,7 +826,7 @@ sub pgsql_validate_all {
         exit $OCF_ERR_CONFIGURED;
     }
 
-    exit $OCF_SUCCESS;
+    return $OCF_SUCCESS;
 }
 
 
