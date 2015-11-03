@@ -26,6 +26,9 @@ After a failover, you will have to:
   * check that everything works fine
   * Allow a new automated failover: ``crm_resource --resource pgsqld --delete-parameter startable``
 
+## Installation
+
+Just copy the file ``pgsqlsr`` to your OCF_ROOT folder (usualy ``/usr/lib/ocf/resource.d/heartbeat/``). Make sure the file has the executable right and its owner is the same than the other scripts there.
 
 ## Configuration
 
