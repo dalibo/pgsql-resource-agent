@@ -161,7 +161,7 @@ sub __ha_log {
         if ( $ENV{'HA_debug'} == 0 and $loglevel eq 'debug' ) {
             return 0;
         }
-        elsif ( not $ignore_stderr ) {
+        elsif ( $ignore_stderr ) {
             # something already printed this error to stderr, so ignore
             return 0;
         }
