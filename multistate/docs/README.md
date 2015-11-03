@@ -31,6 +31,8 @@ will NOT edit your setup. You just have to follow these pre-requisites:
   * slave __must__ be in hot_standby (accessible in read-only)
   * you __must__ provide a template file on each node which will be copied as
     the local ``recovery.conf`` when needed by the agent
+  * the recovery template file must contain ``standby_mode = on``
+  * the recovery template file must contain ``recovery_target_timeline = 'latest'``
   * in the ``primary_conninfo`` parameter of your ``recovery.conf`` template
     file you __must__ set ``application_name`` to the node name as seen in
     Pacemaker (usually, the hostname)
