@@ -2,7 +2,7 @@ Build.PL
 MANIFEST			This list of files
 MYMETA.json
 MYMETA.yml
-README.md
+docs/README.md
 docs/INSTALL.md
 lib/OCF_Directories.pm.PL
 lib/OCF_Functions.pm
