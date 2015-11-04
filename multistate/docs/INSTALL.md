@@ -5,6 +5,14 @@ This agent is written in perl. Its installation process follow the perl common
 method, but its installation path follow usual path used for OCF libraries and
 scripts.
 
+Prerequisite
+------------
+
+The perl popular method to install packages is to use Module::Build. Depending 
+on the system, you might need to install a package:
+  * under Debian and derivatives, you need ``libmodule-build-perl``
+  * under RHEL and derivatives, you need ``perl-Module-Build``
+
 Quick install
 -------------
 
