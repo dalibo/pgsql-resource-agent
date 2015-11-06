@@ -82,9 +82,10 @@ The resource agent requires the PostgreSQL instances to be already set up and
 ready to start. Moreover, it requires a ``recovery.conf`` template ready to use.
 You can create a ``recovery.conf`` file suitable to your needs, the only
 requirements are:
-  * a ``primary_conninfo``, but without ``application,_name``. This parameter
-    will be set to the hostname of the serveur automatically.
+  * have ``standby_mode = on``
   * have ``recovery_target_timeline = 'latest'``
+  * a ``primary_conninfo``
+  
 
 Here are some quick steps to build your primary postgres instance and its
 standby. On the primary:
