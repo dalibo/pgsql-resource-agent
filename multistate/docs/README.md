@@ -44,14 +44,14 @@ can set:
   * ``pgdata``: location of the PGDATA of your instance (default:
     ``/var/lib/pgsql/data``)
   * ``pghost``: the socket directory or IP address to use to connect to the
-    local instance (default: /tmp)
-  * ``pgport``:  the port to connect to the local instance (default: 5432)
+    local instance (default: ``/tmp``)
+  * ``pgport``:  the port to connect to the local instance (default: ``5432``)
   * ``recovery_tpl``: the local template that will be copied as the
-    PGDATA/recovery.conf file. This template file must exists on all node. Note
+    ``PGDATA/recovery.conf`` file. This template file must exists on all node. Note
     that its ``primary_conninfo`` parameter must be different on each node as
-    explained earlier.
+    explained earlier (default: ``$PGDATA/recovery.conf.pcmk``).
   * ``system_user``: the system owner of your instance's processus (default:
-    postgres)
+    ``postgres``)
 
 For a demonstration about how to setup a cluster, see
 ``multistate/docs/Quick_Start.md``.
