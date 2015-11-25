@@ -17,7 +17,7 @@ CASE-BLOCK cleanup
 
 SETUP-AGENT
     Include cleanup
-    echo $PGBIN >&2
+    echo "PGBIN: $PGBIN" >&2
     sudo -iu postgres mkdir -p "$PGDATA"
     sudo -iu postgres "$PGBIN"/initdb --nosync -D "$PGDATA" &> /dev/null 
     cat <<-EOC>> "$PGDATA"/postgresql.conf

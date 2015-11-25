@@ -744,9 +744,8 @@ sub pgsql_validate_all {
     my $nodename = ocf_local_nodename();
 
     # check binaries
-    return $OCF_ERR_INSTALLED unless -x $PGCTL   and -x $PGPSQL
-        and -x $PGCTRLDATA    and -x $PGISREADY and -x $CRM_MASTER
-        and -x $CRM_ATTRIBUTE and -x $CRM_NODE  and -x $CRM_RESOURCE;
+    exit $OCF_ERR_INSTALLED unless -x $PGCTL and -x $PGPSQL
+        and -x $PGCTRLDATA and -x $PGISREADY;
 
     # check pgdata
     if ( ! -d $pgdata ) {
