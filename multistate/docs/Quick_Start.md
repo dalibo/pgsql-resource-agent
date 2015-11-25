@@ -8,7 +8,6 @@ This quick start guide is based on CentOS 6.6, using the ``pcs`` command.
 First, we should make sure NetworkManager is disabled. The network setup should
 NOT be dynamically handled by some external daemons. Only Pacemaker related
 processes should be able to deal with this:
-
 ```
 chkconfig NetworkManager off
 service NetworkManager stop
@@ -17,7 +16,6 @@ service NetworkManager stop
 During the cluster setup, we use the cluster name in various places, make sure
 all your servers names can be resolved to the correct IPs. We usually set this
 in the ``/etc/hosts`` file:
-
 ```
 192.168.1.51 srv1
 192.168.1.52 srv2
@@ -29,7 +27,6 @@ in the ``/etc/hosts`` file:
 
 Finally, we have to allow the network traffic related to the cluster and
 PostgreSQL to go through the firewalls:
-
 ```
 service iptables start
 
@@ -51,7 +48,6 @@ service iptables save
 
 We are using the PostgreSQL packages from the PGDG repository. Here is how to
 install and set up this repository on your system:
-
 ```
 yum install http://yum.postgresql.org/9.3/redhat/rhel-6-x86_64/pgdg-centos93-9.3-1.noarch.rpm
 ```
@@ -60,13 +56,11 @@ Make sure to double adapt the previous command with the latest package available
 and the PostgreSQL version you need.
 
 We can now install everything we need for our cluster:
-
 ```
-yum install -y corosync pacemaker postgresql93 postgresql93-contrib postgresql93-server resource-agents pcs pcsd cman
+yum install -y corosync pacemaker postgresql93 postgresql93-contrib postgresql93-server resource-agents pcs pcsd cman perl-Module-Build
 ```
 
 Finally, we download and install the ``pgsql-resource-agent`` resource agent:
-
 ```
 cd /usr/local/src
 git clone https://github.com/dalibo/pgsql-resource-agent.git
@@ -85,11 +79,12 @@ requirements are:
   * have ``standby_mode = on``
   * have ``recovery_target_timeline = 'latest'``
   * a ``primary_conninfo`` with an ``application_name`` set to the node name
-  
 
 Here are some quick steps to build your primary postgres instance and its
-standby. On the primary:
+standby. As this is not the main subject here, they are **quick and dirty**.
+Rely on the PostgreSQL documentation for a proper setup.
 
+On the primary:
 ```
 # As root
 service postgresql-9.3 initdb
@@ -122,7 +117,6 @@ service postgresql-9.3 start
 ```
 
 Now, on each standby, clone the primary. E.g.:
-
 ```
 pg_basebackup -h srv1 -D ~postgres/9.3/data/ -X stream -R -P
 ```
@@ -130,7 +124,6 @@ pg_basebackup -h srv1 -D ~postgres/9.3/data/ -X stream -R -P
 Finally, make sure to stop the PostgreSQL services __everywhere__ and to
 disabling them, as Pacemaker will take care of starting/stopping everything for
 you:
-
 ```
 service postgresql-9.3 stop
 chkconfig postgresql-9.3 off
@@ -147,39 +140,34 @@ members of the cluster. We need to set a password to this user so it can
 authenticate to other nodes easily. As cluster management commands can be run on
 any member of the cluster, it is recommended to set the same password everywhere
 to avoid confusions :
-
 ```
 passwd hacluster
 ```
 
 Enable and start the pcsd daemon on all the nodes:
-
 ```
 chkconfig pcsd on
 service pcsd start
 ```
 
 Now, authenticate each node to the other ones using the following command:
-
 ```
 pcs cluster auth srv1 srv2 srv3 -u hacluster
 ```
 
 We can now create our cluster!
-
 ```
 pcs cluster setup --name cluster_pgsql srv1 srv2 srv3
 ```
 
-If you have alternative network available, you can use the following syntax:
-
+If you have alternative network available (this is highly recommended), you can
+use the following syntax:
 ```
 pcs cluster setup --name cluster_pgsql srv1,srv1-adm srv2,srv2-adm srv3,srv3-adm
 ```
 
 If your version of ``pcs`` does not support it, you can falback on the old but
 useful ``ccs``:
-
 ```
 pcs cluster setup --name cluster_pgsql srv1 srv2 srv3
 ccs -f /etc/cluster/cluster.conf --addalt srv1 srv1-adm
@@ -189,7 +177,6 @@ pcs cluster sync
 ```
 
 You can now start your cluster!
-
 ```
 pcs cluster start --all
 ```
@@ -207,7 +194,8 @@ resources ``fence_ifmib_xxx`` are stonith resource: we create one stonith
 resource for each node. Each fencing resource will not be allowed to run on the
 node it is suppose to stop. We are using the fence_ifmib stonith agent, which is
 an I/O fencing agent allowing to control network switch through the SNMP
-protocol.
+protocol. For more information about fencing, see documentation
+multistate/docs/FENCING.md.
 
 First of all, let's create an empty CIB file and fill it with some basic setup.
 We will push to the cluster once we are completely done:
@@ -225,11 +213,9 @@ Then, we must start populating it with the stonith resources:
 pcs -f cluster1.xml stonith create fence_ifmib_srv1 fence_ifmib pcmk_host_check="static-list" pcmk_host_list="srv1" ipaddr="192.168.1.4" port="11" community="private" action="off"
 pcs -f cluster1.xml stonith create fence_ifmib_srv2 fence_ifmib pcmk_host_check="static-list" pcmk_host_list="srv2" ipaddr="192.168.1.4" port="12" community="private" action="off"
 pcs -f cluster1.xml stonith create fence_ifmib_srv3 fence_ifmib pcmk_host_check="static-list" pcmk_host_list="srv3" ipaddr="192.168.1.4" port="13" community="private" action="off"
-pcs -f cluster1.xml stonith create fence_ifmib_srv4 fence_ifmib pcmk_host_check="static-list" pcmk_host_list="srv4" ipaddr="192.168.1.4" port="14" community="private" action="off"
 pcs -f cluster1.xml constraint location fence_ifmib_srv1 avoids srv1=INFINITY
 pcs -f cluster1.xml constraint location fence_ifmib_srv2 avoids srv2=INFINITY
 pcs -f cluster1.xml constraint location fence_ifmib_srv3 avoids srv3=INFINITY
-pcs -f cluster1.xml constraint location fence_ifmib_srv4 avoids srv4=INFINITY
 ```
 
 We add the PostgreSQL ``pgsqld`` resource and the multistate ``pgsql-ha``
