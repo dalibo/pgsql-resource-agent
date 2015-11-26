@@ -35,7 +35,7 @@ our $PROGRAM = 'pgsqlms';
 # OCF environment
 my $OCF_RESOURCE_INSTANCE = $ENV{'OCF_RESOURCE_INSTANCE'};
 my $OCF_ACTION            = $ARGV[0];
-my $OCF_PRIMARY_NODE      = $ENV{'OCF_RESKEY_primary_node'};
+my $OCF_PRIMARY_NODE      = $ENV{'OCF_RESKEY_primary_node'} || '';
 
 my $OCF_notify_type           = $ENV{'OCF_RESKEY_CRM_meta_notify_type'}              || '';
 my $OCF_notify_operation      = $ENV{'OCF_RESKEY_CRM_meta_notify_operation'}         || '';
@@ -362,7 +362,9 @@ sub _query {
 # This sub is supposed to be executed from a master monitor action.
 #
 sub _check_lsn_diff {
+    my $best_candidate;
     my $row_num;
+    my $row;
     my $query;
     my @rs;
     my $rc;
@@ -373,7 +375,7 @@ sub _check_lsn_diff {
 
     # If the primary node attribute has not been set, then no promotion has
     # occurred yet, so we do not need to check LSN diff.
-    if ( not defined $OCF_PRIMARY_NODE or $OCF_PRIMARY_NODE eq '' ) {
+    if ( $OCF_PRIMARY_NODE eq '' ) {
         ocf_log( 'debug',
             '_check_lsn_diff: primary_node attribute not set, there was probably no promotion yet'
         );
@@ -383,21 +385,29 @@ sub _check_lsn_diff {
 
     # We check the LSN diff by querying the "pg_stat_replication" view, which
     # has one line for each secondary connected through streaming replication.
-    # We order the result so the highest row_number should be attributed to
-    # the node with minimal diff, or the lowest node name (alphanumeric sort)
-    # in case of equality.
+    # The row_number applies on the result set ordered on diff DESC so the highest
+    # row_number should be attributed to the node with minimal diff, or the lowest
+    # node name (alphanumeric sort) in case of equality.
+    # The result set itself is order by priority DESC to process best known
+    # candidate first.
+    # Current Master priority is set to 0, so last row.
     $query = q{
-        SELECT NULL, -1, 0, pg_current_xlog_location()
+      SELECT application_name, diff, priority, location, state
+      FROM (
+        SELECT NULL AS application_name, -1 AS diff, 0 as priority,
+          pg_current_xlog_location() AS location, 'master' AS state
         UNION ALL
         SELECT application_name, diff,
           row_number() OVER (ORDER BY diff DESC, application_name DESC),
-          pg_current_xlog_location()
+          write_location AS location, state
         FROM (
-          SELECT application_name, pg_xlog_location_diff(
+          SELECT application_name, write_location, state, pg_xlog_location_diff(
               pg_current_xlog_location(), write_location
             ) AS diff
           FROM pg_stat_replication
-        ) AS s
+        ) AS s2
+      ) AS s1
+      ORDER BY priority DESC
     };
 
     $rc = _query( $query, \@rs );
@@ -409,18 +419,17 @@ sub _check_lsn_diff {
         exit $OCF_ERR_GENERIC;
     }
 
-    # We update the cluster resource "last_primary_lsn" using the current
-    # primary LSN position we get in the first line from the query resultset.
+    # We update the cluster resource "last_primary_lsn" using the current
+    # primary LSN position. The master is in the last row of the result set
+    $row = pop @rs;
     qx{ $CRM_RESOURCE --resource "$OCF_RESOURCE_INSTANCE" \\
-        --set-parameter last_primary_lsn --parameter-value "$rs[0][3]" };
+        --set-parameter last_primary_lsn --parameter-value "$row->[3]" };
+
     if ( $? != 0 ) {
         ocf_log( 'crit',  sprintf
-            '_check_lsn_diff: Can not set last_primary_lsn (%s)',
-            $rs[0][3] );
+            '_check_lsn_diff: Can not set last_primary_lsn (%s)', $row->[3] );
         exit $OCF_ERR_GENERIC;
     }
-
-    shift @rs;
 
     $row_num = scalar @rs;
 
@@ -430,46 +439,66 @@ sub _check_lsn_diff {
     ocf_log( 'info', '_check_lsn_diff: No secondary connected' )
         if $row_num == 0;
 
-    # For each secondary connected, set their master score based on the
-    # row_number: the highest row_number is the best candidate to promotion.
-    # FIXME avoid updating scores if there was no change with previous scores ?
-    while ( my $row = shift @rs ) {
+    # For each secondary connected, set their master score based on the following
+    # rule: the first known node/application, with the highest priority and
+    # with an acceptable state.
+    while ( $row = shift @rs ) {
+        my $node_score;
 
-        my $node_score = qx{ $CRM_MASTER --node "$row->[0]" --quiet -G };
+        if ( $partition_nodes !~ /$row->[0]/ ) {
+            ocf_log( 'info', sprintf
+                '_check_lsn_diff: ignoring unknown application_name/node "%s"', $row->[0] );
+            next;
+        }
+
+        $node_score = qx{ $CRM_MASTER --node "$row->[0]" --quiet -G };
         chomp $node_score;
 
-        # Update "lsn_diff" node attribute for this node
-        # FIXME why should the master set "lsn_diff" during its monitor ?
-        qx{ $CRM_ATTRIBUTE --node "$row->[0]" --name lsn_diff \\
-            --update "$row->[1]" };
-
-        ocf_log( 'debug', sprintf
-                '_check_lsn_diff: checking if "%s" is the best candidate to promotion.',
-                $row->[0], $node_score );
-
-        # If this is the last line from the resultset, then this node is the
-        # best candidate, thus it receives the highest score.
-        if ( $row->[2] == $row_num ) {
-            if ( $node_score != 1000 ) {
-                ocf_log( 'info', sprintf
-                    '_check_lsn_diff: "%s" is the best candidate to promotion, set score to 1000',
-                    $row->[0] );
-                qx{ $CRM_MASTER --node "$row->[0]" --update 1000 };
-            }
-            else {
-                ocf_log( 'debug', sprintf
-                    '_check_lsn_diff: "%s" is still the best candidate to promotion',
-                    $row->[0] );
-            }
-        }
-        elsif ( $node_score != 1 ) {
-            # The other nodes all receive the same score
-            # FIXME adapt this so each node receives a score based on their
-            #   rownum.
+        if ( $row->[4] =~ /^\s*(?:startup|backup)\s*$/ ) {
+            # We ignore any standby being in state backup (pg_basebackup
             ocf_log( 'info', sprintf
-                '_check_lsn_diff: "%s" is not a candidate to promotion, set score to 1',
-                $row->[0] );
-            qx{ $CRM_MASTER --node "$row->[0]" --update 1 };
+                '_check_lsn_diff: forbid promotion on "%s" in state "%s", set score to -1',
+                $row->[0], $row->[4] );
+
+            qx{ $CRM_MASTER --node "$row->[0]" --update -1 }
+                if $node_score != -1;
+        }
+        else {
+            # Update "lsn_diff" node attribute for this node
+            # FIXME why should the master set "lsn_diff" during its monitor ?
+            qx{ $CRM_ATTRIBUTE --node "$row->[0]" --name lsn_diff \\
+                --update "$row->[1]" };
+
+            ocf_log( 'debug', sprintf
+                    '_check_lsn_diff: checking if "%s" is the best candidate to promotion.',
+                    $row->[0], $node_score );
+
+            # Because the result set is sorted by priority, the very first node
+            # processed here is the best candidate and receives the highest score
+            if ( not defined $best_candidate ) {
+                $best_candidate = $row->[0];
+
+                if ( $node_score != 1000 ) {
+                    ocf_log( 'info', sprintf
+                        '_check_lsn_diff: "%s" is the best candidate to promotion, set score to 1000',
+                        $row->[0] );
+                    qx{ $CRM_MASTER --node "$row->[0]" --update 1000 };
+                }
+                else {
+                    ocf_log( 'debug', sprintf
+                        '_check_lsn_diff: "%s" is still the best candidate to promotion',
+                        $row->[0] );
+                }
+            }
+            elsif ( $node_score != 1 ) {
+                # The other nodes all receive the same score
+                # FIXME adapt this so each node receives a score based on their
+                #   rownum.
+                ocf_log( 'info', sprintf
+                    '_check_lsn_diff: "%s" is not a candidate to promotion, set score to 1',
+                    $row->[0] );
+                qx{ $CRM_MASTER --node "$row->[0]" --update 1 };
+            }
         }
 
         # Remove this node from the known nodes list.
@@ -485,7 +514,8 @@ sub _check_lsn_diff {
         next if $node eq $nodename;
 
         ocf_log( 'warning',
-            "_check_lsn_diff: $node is not connected to the primary, set score to 0" );
+            '_check_lsn_diff: "%s" is not connected to the primary, set score to 0',
+            $node );
         qx{ $CRM_MASTER --node "$node" --update 0 };
     }
 
@@ -686,7 +716,7 @@ sub ocf_meta_data {
                 FIXME: DON'T TOUCH THIS
               </longdesc>
               <shortdesc lang="en">FIXME: DON'T TOUCH THIS</shortdesc>
-              <content type="string" default="0" />
+              <content type="string" default="" />
             </parameter>
 
             <parameter name="last_primary_lsn" unique="0" required="0">
@@ -1357,9 +1387,12 @@ sub pgsql_promote {
         # Set the "primary_node" resource parameter to the promoted node name.
         qx{ $CRM_RESOURCE --resource $OCF_RESOURCE_INSTANCE \\
             --set-parameter primary_node --parameter-value "$nodename" };
+        ocf_log( 'debug', 'pgsql_promote: primary_node set' );
 
         # Set master score to 1001 for this node so it sticks to this role.
-        qx { $CRM_MASTER --update 1001 };
+        qx{ $CRM_MASTER --update 1001 };
+
+        ocf_log( 'debug', 'pgsql_promote: crm_master to 1001 done' );
 
         return $OCF_SUCCESS;
     }
