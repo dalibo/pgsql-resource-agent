@@ -136,12 +136,55 @@ rtt min/avg/max/mdev = 1.548/1.548/1.548/0.000 ms
 ## I/O fencing using SNMP
 
 The fencing method allows you to shutdown an ethernet port on a manageable
-switch using the SNMP protocol. This tutorial has been tested using a simple
-and cheap D-Link DGS-1210-24 switch.
+switch using the SNMP protocol. This is useful to cut all accesses to the 
+world to your node-to-fence or its iSCSI access to datas.
 
 The fencing agent available is "fence_ifmib". It requires the IP address of the
 switch and the ethernet port to switch off. Optionally, you might want to add
 some authentication information (username/password), the SNMP version (2c by
 default), the SNMP community, etc.
 
-FIXME: add fence_mib example command
+This following example is based on a simple and cheap D-Link DGS-1210-24 switch.
+Its IP address is `192.168.1.4`, the node to fence is `ha2` and its
+port number is 11.
+
+```
+root@ha1:~# ping -c 1 ha2
+PING 192.168.1.101 (192.168.1.101) 56(84) bytes of data.
+64 bytes from 192.168.1.101: icmp_seq=1 ttl=64 time=1.96 ms
+
+--- 192.168.1.101 ping statistics ---
+1 packets transmitted, 1 received, 0% packet loss, time 0ms
+rtt min/avg/max/mdev = 1.964/1.964/1.964/0.000 ms
+
+root@ha1:~# fence_ifmib -a 192.168.1.4 -n 11 -c private -o status
+Status: ON
+
+root@ha1:~# fence_ifmib -a 192.168.1.4 -n 11 -c private -o off
+Success: Powered OFF
+
+root@ha1:~# fence_ifmib -a 192.168.1.4 -n 11 -c private -o status
+Status: OFF
+
+root@ha1:~# ping -c 1 ha2
+PING 192.168.1.101 (192.168.1.101) 56(84) bytes of data.
+
+--- 192.168.1.101 ping statistics ---
+1 packets transmitted, 0 received, 100% packet loss, time 0ms
+
+root@ha1:~# fence_ifmib -a 192.168.1.4 -n 11 -c private -o on
+Success: Powered ON
+
+root@ha1:~# fence_ifmib -a 192.168.1.4 -n 11 -c private -o status
+Status: ON
+
+root@ha1:~# ping -c 1 ha2
+PING 192.168.1.101 (192.168.1.101) 56(84) bytes of data.
+64 bytes from 192.168.1.101: icmp_seq=1 ttl=64 time=1.83 ms
+
+--- 192.168.1.101 ping statistics ---
+1 packets transmitted, 1 received, 0% packet loss, time 0ms
+rtt min/avg/max/mdev = 1.833/1.833/1.833/0.000 ms
+```
+
+__Warning__: if you are fencing a node cutting its network accessed, take great care when you unfence it. While fenced, the node might get angry and try to fence other node when comming back. You better want some quorum setup to keep it under control, or switching off pacemaker before unfencing it.
