@@ -264,3 +264,58 @@ We can now push our CIB to the cluster, which will start all the magic stuff:
 ```
 pcs cluster cib-push cluster1.xml
 ```
+
+## Adding a node to the cluster
+
+Setup your new node following the first chapters. Stop after the PostgreSQL
+setup.
+
+On this new node, setup the pcsd deamon and its authentication:
+```
+passwd hacluster
+chkconfig pcsd on
+service pcsd start
+pcs cluster auth srv1 srv2 srv3 srv4 -u hacluster
+```
+
+On all other node, authenticate to the new node:
+```
+pcs cluster auth srv4 -u hacluster
+```
+
+We are now ready to add the new node. Put the cluster in maintenance mode so it
+does not move resources all over the place when the new node appears:
+```
+pcs property set maintenance-mode=true
+pcs cluster node add srv4,srv41
+```
+
+Or, using the old commands if the syntax of `pcs` with alternate interface is
+not supported:
+```
+pcs cluster node add srv4
+ccs -f /etc/cluster/cluster.conf --addalt srv4 srv4-adm
+pcs cluster sync
+```
+
+And reload the corosync configuration on all the nodes if needed (it just fail
+if not needed):
+```
+pcs cluster reload corosync
+```
+
+We now need to allow more clone in the cluster:
+```
+pcs resource meta pgsql-ha clone-max=4
+```
+
+Add the stonith agent for the new node:
+```
+pcs stonith create fence_ifmib_srv4 fence_ifmib pcmk_host_check="static-list" pcmk_host_list="srv4" ipaddr="192.168.1.4" port="14" community="private" action="off"
+pcs constraint location fence_ifmib_srv4 avoids srv4=INFINITY
+```
+
+And you can now exit your maintenance mode:
+```
+pcs property set maintenance-mode=false
+```
