@@ -13,6 +13,16 @@ It has been designed to forbid more than **one** failover, so only one failover
 could be automated. After a failover, an administrator action is required to 
 cleanup the situation.
 
+Because this agent is stateless, Pacemaker does not monitor slaves and has no
+clue about their situation. There is no logic whatsoever in case of
+failover. Should a failover occurs, the agent is not able to hint Pacemaker
+about the best standby to promote. The comportment is unpredictable.
+
+That is why this resource agent is best used in two nodes clusters. With more
+than 1 standby, the administrator is in charge to make sure the best standby
+will be elected (using location constraints, synchronous replication,
+cascading, ...).
+
 To forbid more than one failover, the resource parameter ``startable`` is set to 
 the hostname of the promoted standby. As soon as this parameter is created and 
 set, the only instance able to start will be the one designated there.
