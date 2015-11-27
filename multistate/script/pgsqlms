@@ -498,7 +498,7 @@ sub _check_locations {
         # Exclude the current node.
         next if $node eq $nodename;
 
-        ocf_log( 'warning',
+        ocf_log( 'warning', sprintf
             '_check_locations: "%s" is not connected to the primary, set score to 0',
             $node );
         qx{ $CRM_MASTER --node "$node" --update 0 };
