@@ -424,8 +424,7 @@ sub _check_locations {
 
     # If there is no row left at this point, it means that there is no
     # secondary instance connected.
-    # FIXME should this raise a warning message ?
-    ocf_log( 'info', '_check_locations: No secondary connected' )
+    ocf_log( 'warning', '_check_locations: No secondary connected' )
         if $row_num == 0;
 
     # For each standby connected, set their master score based on the following
