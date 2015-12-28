@@ -698,9 +698,11 @@ sub ocf_meta_data {
 
             <parameter name="primary_node" unique="0" required="0">
               <longdesc lang="en">
-                FIXME: DON'T TOUCH THIS
+                Name of the node hosting the current master state.
+                This parameter is for internal use only, do not configure it
+                during cluster setup.
               </longdesc>
-              <shortdesc lang="en">FIXME: DON'T TOUCH THIS</shortdesc>
+              <shortdesc lang="en">Internal use only</shortdesc>
               <content type="string" default="" />
             </parameter>
 
