@@ -3,8 +3,7 @@ MANIFEST			This list of files
 MYMETA.json
 MYMETA.yml
 README.md
-docs/INSTALL.md
-docs/FENCING.md
+INSTALL.md
 docs/Quick_Start.md
 lib/OCF_Directories.pm.PL
 lib/OCF_Functions.pm
