@@ -5,7 +5,7 @@
       "Jehan-Guillaume <jgdr@dalibo.com>"
    ],
    "dynamic_config" : 0,
-   "generated_by" : "Module::Build version 0.4214",
+   "generated_by" : "Module::Build version 0.421",
    "license" : [
       "bsd"
    ],
@@ -44,6 +44,5 @@
          "url" : "https://github.com/dalibo/pgsql-resource-agent"
       }
    },
-   "version" : "0.1",
-   "x_serialization_backend" : "JSON::PP version 2.27203"
+   "version" : "0.1"
 }
