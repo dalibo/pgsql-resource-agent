@@ -232,7 +232,7 @@ pcs -f cluster1.xml resource create pgsqld ocf:heartbeat:pgsqlms \
 # pgsql-ha
 pcs -f cluster1.xml resource master pgsql-ha pgsqld \
     master-max=1 master-node-max=1                  \
-    clone-max=4 clone-node-max=1 notify=true
+    clone-max=3 clone-node-max=1 notify=true
 ```
 
 We add the IP addresse which should be started on the primary node:
