@@ -20,7 +20,6 @@ use POSIX qw(locale_h);
 use File::Spec;
 use File::Temp;
 use Data::Dumper;
-use Sys::Syslog qw(:standard :macros);
 
 use FindBin;
 use lib "$FindBin::RealBin/../lib/";
@@ -1519,9 +1518,6 @@ sub pgsql_reload {
 # Avoid "could not change directory" when executing commands as "system-user".
 chdir File::Spec->tmpdir();
 
-# Send log messages to local4 syslog facility.
-# openlog('pgsqlms', 'pid', LOG_LOCAL4);
-
 # Set current node name.
 $nodename = ocf_local_nodename();
 
@@ -1544,7 +1540,5 @@ for ( $OCF_ACTION ) {
     elsif ( /methods/      ) { ocf_methods()   }
     else  { $exit_code = $OCF_ERR_UNIMPLEMENTED }
 }
-
-# closelog();
 
 exit $exit_code;
