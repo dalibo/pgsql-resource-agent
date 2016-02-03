@@ -947,7 +947,7 @@ sub pgsql_stop {
     }
     elsif ( $rc != $OCF_SUCCESS and $rc != $OCF_RUNNING_MASTER ) {
         ocf_log( 'warning',  sprintf
-            'pgsql_stop: unexpected state for instance "%s" (returned $rc)',
+            'pgsql_stop: unexpected state for instance "%s" (returned %d)',
             $OCF_RESOURCE_INSTANCE, $rc );
         return $OCF_ERR_GENERIC;
     }
