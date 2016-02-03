@@ -158,7 +158,10 @@ sub __ha_log {
         # FIXME
         # T.N.: this was ported with the bug on $loglevel being empty
         # and never set before the test here...
-        if ( $ENV{'HA_debug'} == 0 and $loglevel eq 'debug' ) {
+        if ( defined $ENV{'HA_debug'}
+             and $ENV{'HA_debug'} == 0
+             and $loglevel eq 'debug'
+        ) {
             return 0;
         }
         elsif ( $ignore_stderr ) {
@@ -232,7 +235,7 @@ sub ha_log {
 
 sub ha_debug {
 
-    return 0 if $ENV{'HA_debug'} == 0;
+    return 0 if defined $ENV{'HA_debug'} and $ENV{'HA_debug'} == 0;
 
     if ( -t STDERR ) {
         if ( defined $ENV{'HA_LOGTAG'} and $ENV{'HA_LOGTAG'} ne '' ) {
@@ -452,8 +455,6 @@ $ENV{'OCF_ROOT'} = '/usr/lib/ocf'
 undef $ENV{'OCF_FUNCTIONS_DIR'}
     if defined $ENV{'OCF_FUNCTIONS_DIR'}
     and $ENV{'OCF_FUNCTIONS_DIR'} eq "$ENV{'OCF_ROOT'}/resource.d/heartbeat";
-
-$ENV{'HA_debug'} = 0 unless defined $ENV{'HA_debug'};
 
 # Define OCF_RESKEY_CRM_meta_interval in case it isn't already set,
 # to make sure that ocf_is_probe() always works
