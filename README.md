@@ -7,8 +7,15 @@ resource) from the Pacemaker point of view. It is very limited, simple,
 allowing only one failover then wait for an administrator action. It only shows
 Pacemaker where the master instance is located. Should a failover occurs, it
 will promote the slave on the designated node.
-    
+
 Supports PostgreSQL 9.0 and more.
+
+After leaving in this repository for some time, the multistate agent ``pgsqlms``
+has acquired its own identity! See: https://github.com/dalibo/PAF
+
+The development effort is currently geared towards PAF and activity on
+``pgsql-resource-agent`` is reduced to the minimum. We recommend you to use PAF
+in priority.
 
 ## Description
 
