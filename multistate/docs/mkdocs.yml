@@ -1,7 +1,0 @@
-site_name: PostgreSQL Automatic Failover
-pages:
-- [README.md, Home]
-- [Quick_Start.md, Quick Start]
-- [about.md, About]
-- [INSTALL.md, INSTALL]
-theme: readthedocs
