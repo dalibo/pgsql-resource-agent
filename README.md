@@ -1,3 +1,12 @@
+__WARNING__
+
+After leaving in this repository for some time, the multistate agent ``pgsqlms``
+has acquired its own identity! See: https://github.com/dalibo/PAF
+
+The development effort is currently geared towards PAF and activity on
+``pgsql-resource-agent`` is reduced to the minimum. We recommend you to use PAF
+in priority.
+
 # pgsql-resource-agent
 
 Simple Pacemaker OCF Agent for PostgreSQL servers in streaming replication.
@@ -10,12 +19,7 @@ will promote the slave on the designated node.
 
 Supports PostgreSQL 9.0 and more.
 
-After leaving in this repository for some time, the multistate agent ``pgsqlms``
-has acquired its own identity! See: https://github.com/dalibo/PAF
 
-The development effort is currently geared towards PAF and activity on
-``pgsql-resource-agent`` is reduced to the minimum. We recommend you to use PAF
-in priority.
 
 ## Description
 
